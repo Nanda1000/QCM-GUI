@@ -1,0 +1,34 @@
+#Sauerbrey Equation
+
+
+import numpy as np
+
+#Gathering freqency data and calculating it from acquired data from nanovna
+
+def parameter(freqs, impedance):
+    Z1 = np.abs(impedance)
+    
+    min_index = np.argmin(Z1)
+    
+    ft = freqs[min_index]
+    
+    return ft
+    
+"""
+Sauerbrey equation to estimate mass deposited from frequency shift.
+    f0: initial resonance frequency (Hz)
+    ft: shifted frequency (Hz)
+    area: active electrode area in m^2
+    p: quartz density (kg/m^3)
+    mu: shear modulus (Pa)
+    
+    △m = mass change = - △fA√(p*mu)/f0^2
+
+"""
+
+def sauerbrey(f0, p, u, ft, A):
+    f = f0 -ft
+    m = (f * A * np.sqrt(p * u))/(f0 ** 2)
+    
+    return m
+    
