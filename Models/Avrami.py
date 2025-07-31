@@ -28,7 +28,7 @@ def avrami(f_array, f0, fmax, ft):
     fmaxed = f0 - fmax
     delta_f = f0 - ft
     if fmaxed == 0:
-        return
+        return 0  # Return 0 instead of None
     return delta_f / fmaxed
 
 def formula(k, n, t):
@@ -41,7 +41,11 @@ def formula(k, n, t):
 def fit(t, f_array):
     f0 = f_array[0]
     f_max = f_array[-1]
-    X_t = avrami(f_array, f0, f_max)
-    pop,_ = curve_fit(formula, t, X_t, p0=[1e-4, 1.0])
+    X_t = []
+    for ft in f_array:
+        X_val = avrami(f_array, f0, f_max, ft)
+        X_t.append(X_val if X_val is not None else 0)
+    X_t = np.array(X_t)
+    pop, _ = curve_fit(formula, t, X_t, p0=[1e-4, 1.0])
     return pop
     

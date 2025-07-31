@@ -5,11 +5,11 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import least_squares
 import pyvisa
-from test import acquire_data
-from Butterworth import half_power_threshold, parameter, fit_data, butterworth
-from Avrami import avrami, fit, formula
-from Sauerbrey import parameter as sauerbrey_parameter, sauerbrey
-from konazawa import parameter as konazawa_parameter, konazawa
+from test.test import acquire_data
+from Models.Butterworth import half_power_threshold, parameter, fit_data, butterworth
+from Models.Avrami import avrami, fit, formula
+from Models.Sauerbrey import parameter as sauerbrey_parameter, sauerbrey
+from Models.konazawa import parameter as konazawa_parameter, konazawa
 from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
@@ -204,7 +204,7 @@ class MainWindow(QMainWindow):
         self.area = QLineEdit()
 
         # Table
-        self.data = pd.DataFrame(columns=["Time", "Frequency(Hz)", "Resistance(Ω)", "Phase"])
+        self.data = pd.DataFrame(columns=["Timestamp", "Time", "Frequency(Hz)", "Resistance(Ω)", "Phase"])
         self.model = TableModel(self.data)
         self.model.dataChanged.connect(self.update_plot)
         self.table = QTableView()
@@ -330,8 +330,6 @@ class MainWindow(QMainWindow):
 
     def continuous_logging(self):
         try:
-            timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
-            t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
             start = float(self.start_frequency.text() or 1e6)
             stop = float(self.end_frequency.text() or 10e6)
             points = int(self.sweep_points.text() or "201")
@@ -347,12 +345,27 @@ class MainWindow(QMainWindow):
             initial_guess
          )
             self.Z_fit = butterworth(freqs, *result.x)
-            self.fit_btn.setEnabled(True)
+            if hasattr(self, 'fit_btn'):
+                self.fit_btn.setEnabled(True)
 
             abs_freq = float(self.abs_frequency.text())
             abs_res = float(self.abs_resistance.text())
 
+            # Create proper timestamp
+            current_time = pd.Timestamp.now()
+            
+            # Calculate time in seconds from start of logging
+            if self.data.empty:
+                t_seconds = 0
+            else:
+                if "Timestamp" in self.data.columns and not self.data["Timestamp"].empty:
+                    first_timestamp = pd.to_datetime(self.data["Timestamp"].iloc[0])
+                    t_seconds = (current_time - first_timestamp).total_seconds()
+                else:
+                    t_seconds = 0
+
             rows = [{
+                "Timestamp": current_time,
                 "Time": t_seconds,
                 "Frequency(Hz)": f,
                 "Resistance(Ω)": r,
@@ -412,11 +425,19 @@ class MainWindow(QMainWindow):
                 initial_guess
             )
             self.Z_fit = butterworth(freqs, *result.x)
-            self.fit_btn.setEnabled(True)
-            timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
-            t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
+            if hasattr(self, 'fit_btn'):
+                self.fit_btn.setEnabled(True)
+            
+            # Store frequencies for later use
+            self.freqs = freqs
+            
+            # Create proper timestamp
+            current_time = pd.Timestamp.now()
+            t_seconds = 0  # Initial measurement
+            
             self.data = pd.DataFrame({
-                "Timestamp": [t_seconds] * len(freqs),
+                "Timestamp": [current_time] * len(freqs),
+                "Time": [t_seconds] * len(freqs),
                 "Frequency(Hz)": freqs,
                 "Resistance(Ω)": resistances,
                 "Phase": [0] * len(freqs)
@@ -434,6 +455,7 @@ class MainWindow(QMainWindow):
     def insert_button_clicked(self):
         self.data = pd.DataFrame({
             "Timestamp": ["" for _ in range(10)],
+            "Time": ["" for _ in range(10)],
             "Frequency(Hz)": ["" for _ in range(10)],
             "Resistance(Ω)": ["" for _ in range(10)],
             "Phase": ["" for _ in range(10)]
@@ -449,7 +471,7 @@ class MainWindow(QMainWindow):
             if not file:
                 return
             self.data = pd.read_csv(file) if file.endswith(".csv") else pd.read_excel(file)
-            for col in ["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Phase"]:
+            for col in ["Timestamp", "Time", "Frequency(Hz)", "Resistance(Ω)", "Phase"]:
                 if col not in self.data.columns:
                     self.data[col] = ""
             self.model = TableModel(self.data)
