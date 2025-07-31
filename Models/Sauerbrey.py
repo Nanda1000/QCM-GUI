@@ -27,8 +27,8 @@ Sauerbrey equation to estimate mass deposited from frequency shift.
 """
 
 def sauerbrey(f0, p, u, ft, A):
-    f = f0 -ft
-    m = (f * A * np.sqrt(p * u))/(f0 ** 2)
+    delta_f = f0 - ft  # Frequency change
+    m = -delta_f * A * np.sqrt(p * u) / (f0 ** 2)  # Negative sign for mass loading
     
     return m
     

@@ -102,6 +102,10 @@ def acquire_data(device_path, start_freq=1e6, stop_freq=10e6, points=201):
     Returns:
         freqs: list of frequencies (Hz)
         resistance: list of real resistance values (Ohms)
+        impedance: list of complex impedance values
+        reactance: list of imaginary reactance values (Ohms)
+        phase: list of phase values (degrees)
+        time_array: list of time values (seconds)
     """
     device = NanoVNA(device_path)
     device.connect()
@@ -121,17 +125,20 @@ def acquire_data(device_path, start_freq=1e6, stop_freq=10e6, points=201):
     impedance = []
     resistance = []
     reactance = []
+    phase = []
 
     for s in s11:
         denom = 1 - s
         if abs(denom) < 1e-12:
             # Avoid division by zero
             z = complex(np.inf, np.inf)
+            phase_val = 0  # Default phase when impedance is infinite
         else:
             z = Z0 * (1 + s) / denom
+            phase_val = np.angle(z, deg=True)
         impedance.append(z)
         resistance.append(z.real)
         reactance.append(z.imag)
-        phase = np.angle(z, deg=True)
+        phase.append(phase_val)
 
     return freqs, resistance, impedance, reactance, phase, time_array

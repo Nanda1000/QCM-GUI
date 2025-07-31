@@ -5,7 +5,7 @@ import serial.tools.list_ports
 from scipy.optimize import least_squares
 from scipy.interpolate import UnivariateSpline
 import pyqtgraph as pg
-from test import acquire_data
+from test.test import acquire_data
 
 """Some of the key parameters to find the motional resistance(damping/viscosity effect)
 Resonance Frequency which can tell about mass loading effect and for the full modeling
@@ -24,14 +24,24 @@ There are some key formulas to use, Below are the ones
 def butterworth(fs, Rm, Lm, Cm, C0):
     #frequency need to be entered as the value can be obtained from where impedance is minimum tat is magnitude of S11
     
-    w= 2 * np.pi * fs
+    w = 2 * np.pi * fs
     j = 1j
     
-    Zm = Rm + j * w * Lm + 1 /(j*w*Cm)
-    Z0 = 1 / (j * w* C0)
+    # Add protection against division by zero
+    if np.any(w == 0):
+        w = np.where(w == 0, 1e-12, w)  # Replace zeros with small value
+    if np.any(Cm == 0):
+        Cm = np.where(Cm == 0, 1e-12, Cm)  # Replace zeros with small value
+    if np.any(C0 == 0):
+        C0 = np.where(C0 == 0, 1e-12, C0)  # Replace zeros with small value
+    
+    Zm = Rm + j * w * Lm + 1 / (j * w * Cm)
+    Z0 = 1 / (j * w * C0)
     
     #Parallel 
     Y = 1/Zm + 1/Z0
+    # Protect against division by zero in Y
+    Y = np.where(Y == 0, 1e-12, Y)
     Z_tot = 1/Y
     return Z_tot
 
