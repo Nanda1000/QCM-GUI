@@ -403,6 +403,15 @@ class MainWindow(QMainWindow):
             self.impedance = np.array(impedance)
 
             Rm, Lm, Cm, C0, fs = parameter(freqs, self.impedance)
+            self.Rm, self.Lm, self.Cm, self.C0, self.fs = parameter(freqs, self.impedance)
+
+            # Update the UI with calculated parameters
+            if hasattr(self, 'rm_edit'):
+               self.rm_edit.setText(f"{self.Rm:.6f}")
+               self.lm_edit.setText(f"{self.Lm:.6e}")
+               self.cm_edit.setText(f"{self.Cm:.6e}")
+               self.c0_edit.setText(f"{self.C0:.6e}")
+
             initial_guess = [Rm, Lm, Cm, C0]
             result = least_squares(
                 lambda params: np.concatenate([
@@ -461,102 +470,197 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "File Error", str(e))
 
     def crystallizationdynamicskinetics(self):
-     try:
-        main_layout = QVBoxLayout()
-        self.crystallization_widget = QWidget()
-        self.crystallization_widget.setLayout(main_layout)
-        self.crystallization_widget.setWindowTitle("Crystallization Dynamics & Kinetics")
-        self.crystallization_widget.resize(1000, 800)
-        self.crystallization_widget.show()
+        try:
+            # Create a new window for crystallization dynamics & kinetics
+            self.crystallization_widget = QWidget()
+            self.crystallization_widget.setWindowTitle("Crystallization Dynamics & Kinetics")
+            self.crystallization_widget.resize(1400, 1200)
+            main_layout = QVBoxLayout(self.crystallization_widget)
+            main_splitter = QSplitter(Qt.Orientation.Horizontal)
+            
 
-        # Section: Plots
-        plot_layout = QVBoxLayout()
+              # Left panel (controls)
+            left_widget = QWidget()
+            left_layout = QVBoxLayout(left_widget)
+            left_layout.setContentsMargins(0, 0, 0, 0)
+            left_layout.setSpacing(5)
+            
+            right_splitter = QSplitter(Qt.Orientation.Vertical)
+            right_widget = QWidget()
+            right_layout = QVBoxLayout(right_widget)
+            right_layout.setSpacing(10)
 
-        self.plot_resistance = pg.PlotWidget()
-        self.plot_resistance.setTitle("Motional Resistance vs Time")
-        self.plot_resistance.setLabel("left", "Resistance (Ω)")
-        self.plot_resistance.setLabel("bottom", "Time (s)")
-        plot_layout.addWidget(self.plot_resistance)
+            # Section: Plots
+            plot_layout = QVBoxLayout()
 
-        self.plot_frequency = pg.PlotWidget()
-        self.plot_frequency.setTitle("Resonance Frequency vs Time")
-        self.plot_frequency.setLabel("left", "Frequency (Hz)")
-        self.plot_frequency.setLabel("bottom", "Time (s)")
-        plot_layout.addWidget(self.plot_frequency)
+            self.plot_resistance = pg.PlotWidget()
+            self.plot_resistance.setTitle("Motional Resistance vs Time")
+            self.plot_resistance.setLabel("left", "Resistance (Ω)")
+            self.plot_resistance.setLabel("bottom", "Time (s)")
+            plot_layout.addWidget(self.plot_resistance)
 
-        self.plot_phase = pg.PlotWidget()
-        self.plot_phase.setTitle("Phase vs Time")
-        self.plot_phase.setLabel("left", "Phase (degrees)")
-        self.plot_phase.setLabel("bottom", "Time (s)")
-        plot_layout.addWidget(self.plot_phase)
+            self.plot_frequency = pg.PlotWidget()
+            self.plot_frequency.setTitle("Resonance Frequency vs Time")
+            self.plot_frequency.setLabel("left", "Frequency (Hz)")
+            self.plot_frequency.setLabel("bottom", "Time (s)")
+            plot_layout.addWidget(self.plot_frequency)
 
-        # Section: Parameter Inputs
-        form_section = QHBoxLayout()
+            self.plot_phase = pg.PlotWidget()
+            self.plot_phase.setTitle("Phase vs Time")
+            self.plot_phase.setLabel("left", "Phase (degrees)")
+            self.plot_phase.setLabel("bottom", "Time (s)")
+            plot_layout.addWidget(self.plot_phase)
 
-        param_form1 = QFormLayout()
-        param_form1.addRow("Resonance Frequency (f):", QLineEdit())
-        param_form1.addRow("Motional Resistance (Rm):", QLineEdit())
-        param_form1.addRow("Motional Inductance (Lm):", QLineEdit())
-        param_form1.addRow("Motional Capacitance (Cm):", QLineEdit())
-        param_form1.addRow("Static Capacitance (C0):", QLineEdit())
+            self.plot_crystallization_fraction = pg.PlotWidget()
+            self.plot_crystallization_fraction.setTitle("Crystallization Fraction X(t) vs Time")
+            plot_layout.addWidget(self.plot_crystallization_fraction)
 
-        param_form2 = QFormLayout()
-        param_form2.addRow("Initial Frequency (f₀):", QLineEdit())
-        param_form2.addRow("Final Frequency (f_inf):", QLineEdit())
-        param_form2.addRow("Time (t):", QLineEdit())
-        param_form2.addRow("Crystallization Rate (k):", QLineEdit())
-        param_form2.addRow("Avrami Exponent (n):", QLineEdit())
+            # Section: Parameter Inputs
+            #BVD
+            group_box = QGroupBox("Butterworth Van Dyke Model")
 
-        form_section.addLayout(param_form1)
-        form_section.addLayout(param_form2)
+            param_form1 = QFormLayout()
+            self.rm_edit = QLineEdit()
+            self.lm_edit = QLineEdit()
+            self.cm_edit = QLineEdit()
+            self.c0_edit = QLineEdit()
+            self.f_edit = QLineEdit()
 
-        # Fit Button
-        self.fit_btn = QPushButton("Fit BVD Model")
-        self.fit_btn.clicked.connect(self.fit_data)
-        self.fit_btn.setEnabled(False)
+            param_form1.addRow("Frequency (f):", self.f_edit)
+            param_form1.addRow("Motional Resistance (Rm):", self.rm_edit)
+            param_form1.addRow("Motional Inductance (Lm):", self.lm_edit)
+            param_form1.addRow("Motional Capacitance (Cm):", self.cm_edit)
+            param_form1.addRow("Static Capacitance (C0):", self.c0_edit)
+            self.fit_btn = QPushButton("Fit BVD Model")
+            param_form1.addRow(self.fit_btn)
+            
+            
+            #Avrami
+            group_box1 = QGroupBox("Avrami Model")
 
-        # Add to main layout
-        main_layout.addLayout(plot_layout)
-        main_layout.addLayout(form_section)
-        main_layout.addWidget(self.fit_btn)
+            param_form2 = QFormLayout()
+            self.f0_edit = QLineEdit()
+            self.finf_edit = QLineEdit()
+            self.t_edit = QLineEdit()
+            self.k_edit = QLineEdit()
+            self.n_edit = QLineEdit()
+            param_form2.addRow("Initial Frequency (f₀):", self.f0_edit)
+            param_form2.addRow("Final Frequency (f_inf):", self.finf_edit)
+            param_form2.addRow("Time (t):", self.t_edit)
+            param_form2.addRow("Crystallization Rate (k):", self.k_edit)
+            param_form2.addRow("Avrami Exponent (n):", self.n_edit)
+            self.fit_btn1 = QPushButton("Fit Avrami")
+            param_form2.addRow(self.fit_btn1)
 
-        # Plot data from main table
-        if not self.data.empty:
+            group_box.setLayout(param_form1)
+            group_box1.setLayout(param_form2)
+            right_splitter.addWidget(group_box)
+            right_splitter.addWidget(group_box1)
+
+            # Fit Button
+            self.fit_btn1.clicked.connect(self.fit_data1)
+            self.fit_btn.clicked.connect(self.fit_data)
+            self.fit_btn1.setEnabled(True)
+            self.fit_btn.setEnabled(True)
+
+            # Add to main layout
+            left_layout.addLayout(plot_layout)
+            left_widget.setLayout(left_layout)
+            main_splitter.addWidget(left_widget)
+            main_splitter.addWidget(right_splitter)
+            main_layout.addWidget(main_splitter)
+
+            # Plot data from main table
+            if not self.data.empty:
+                try:
+                    timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
+                    t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
+
+                    R = pd.to_numeric(self.data["Resistance(Ω)"], errors="coerce")
+                    F = pd.to_numeric(self.data["Frequency(Hz)"], errors="coerce")
+                    P = pd.to_numeric(self.data["Phase"], errors="coerce")
+
+                    mask_r = timestamps.notnull() & R.notnull()
+                    self.plot_resistance.plot(t_seconds[mask_r], R[mask_r], pen='r', symbol='o', symbolBrush='b')
+
+                    mask_f = timestamps.notnull() & F.notnull()
+                    self.plot_frequency.plot(t_seconds[mask_f], F[mask_f], pen='g', symbol='x', symbolBrush='b')
+
+                    mask_p = timestamps.notnull() & P.notnull()
+                    self.plot_phase.plot(t_seconds[mask_p], P[mask_p], pen='c', symbol='t', symbolBrush='b')
+
+                    # Fit Avrami
+                    try:
+                        popt = fit(t_seconds, F)
+                        k_val, n_val = popt
+                        self.k_edit.setText(f"{k_val:.4e}")
+                        self.n_edit.setText(f"{n_val:.2f}")
+                        X_t = formula(k_val, n_val, t_seconds)
+                        self.plot_crystallization_fraction.plot(t_seconds, X_t, pen='m')
+                        QMessageBox.information(self.crystallization_widget, "Avrami Fit", f"Crystallization Rate k: {k_val:.4e}, Exponent n: {n_val:.2f}")
+                    except Exception as e:
+                        QMessageBox.warning(self.crystallization_widget, "Avrami Fit Error", str(e))
+
+                except Exception as e:
+                    QMessageBox.warning(self.crystallization_widget, "Plotting Error", str(e))
+
+            self.crystallization_widget.show()
+
+        except Exception as e:
+            QMessageBox.warning(self, "Window Error", str(e))
+        
+    def fit_data1(self):
+        try:
+            timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
+            t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
+            freqs = pd.to_numeric(self.data["Frequency(Hz)"], errors="coerce")
+
+            if not self.f0_edit.text() or not self.finf_edit.text():
+                QMessageBox.warning(self, "Input Error", "Please enter both Initial Frequency (f₀) and Final Frequency (f_inf).")
+                return
+
             try:
-                timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
-                t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
+                f0 = float(self.f0_edit.text())
+                finf = float(self.finf_edit.text())
+            except ValueError:
+                QMessageBox.warning(self, "Input Error", "Initial and Final Frequency must be valid numbers.")
+                return
 
-                R = pd.to_numeric(self.data["Resistance(Ω)"], errors="coerce")
-                F = pd.to_numeric(self.data["Frequency(Hz)"], errors="coerce")
-                P = pd.to_numeric(self.data["Phase"], errors="coerce")
+            if len(t_seconds) != len(freqs):
+                raise Exception("Mismatched time and frequency lengths")
 
-                mask_r = timestamps.notnull() & R.notnull()
-                self.plot_resistance.plot(t_seconds[mask_r], R[mask_r], pen='r', symbol='o', symbolBrush='b')
+            X_t = (f0 - freqs) / (f0 - finf)
+            X_t = np.clip(X_t, 0, 1)
 
-                mask_f = timestamps.notnull() & F.notnull()
-                self.plot_frequency.plot(t_seconds[mask_f], F[mask_f], pen='g', symbol='x', symbolBrush='b')
+            k, n = fit(t_seconds, freqs)
+            self.k_edit.setText(f"{k:.4e}")
+            self.n_edit.setText(f"{n:.2f}")
 
-                mask_p = timestamps.notnull() & P.notnull()
-                self.plot_phase.plot(t_seconds[mask_p], P[mask_p], pen='c', symbol='t', symbolBrush='b')
+            X_fit = formula(k, n, t_seconds)
+            self.plot_crystallization_fraction.plot(t_seconds, X_fit, pen='m')
 
-            except Exception as e:
-                QMessageBox.warning(self, "Plotting Error", str(e))
-
-     except Exception as e:
-        QMessageBox.warning(self, "Window Error", str(e))
-
+        except Exception as e:
+            QMessageBox.warning(self, "Avrami Fit Error", str(e))
+        
 
     def fit_data(self):
-        if hasattr(self, "fit_plot_window") and self.fit_plot_window:
-            self.fit_plot_window.close()
-        self.fit_plot_window = pg.GraphicsLayoutWidget(show=True, title="Butterworth Model Fit")
-        self.fit_plot_window.resize(800, 600)
+        try:
+            if hasattr(self, "fit_plot_window") and self.fit_plot_window:
+                self.fit_plot_window.close()
+            self.fit_plot_window = pg.GraphicsLayoutWidget(show=True, title="Butterworth Model Fit")
+            self.fit_plot_window.resize(800, 600)
 
-        plot_widget = self.fit_plot_window.addPlot(title="Measured and Fitted Impedance vs Frequency")
-        plot_widget.setLabel("left", "Impedance (Ohms)")
-        plot_widget.setLabel("bottom", "Frequency (Hz)")
-        plot_widget.plot(self.freqs, np.abs(self.impedance), pen='b', name='Measured Impedance')
-        plot_widget.plot(self.freqs, np.abs(self.Z_fit), pen='r', name='Fitted Impedance')
+            plot_widget = self.fit_plot_window.addPlot(title="Measured and Fitted Impedance vs Frequency")
+            plot_widget.setLabel("left", "Impedance (Ohms)")
+            plot_widget.setLabel("bottom", "Frequency (Hz)")
+
+            if hasattr(self, "impedance") and hasattr(self, "Z_fit") and self.impedance is not None and self.Z_fit is not None:
+                plot_widget.plot(self.freqs, np.abs(self.impedance), pen='b', name='Measured Impedance')
+                plot_widget.plot(self.freqs, np.abs(self.Z_fit), pen='r', name='Fitted Impedance')
+            else:
+                QMessageBox.warning(self, "Fit Error", "Impedance data or fit result is missing.")
+        except Exception as e:
+            QMessageBox.warning(self, "Fit Error", str(e))
 
     def sauerbrey_konazawa(self):
         try:
