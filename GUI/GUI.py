@@ -151,7 +151,6 @@ class MainWindow(QMainWindow):
         self.start_logging = QPushButton("Start Logging")
         self.stop_logging = QPushButton("Stop Logging")
         self.upload_button = QPushButton("Upload Data")
-        self.calculate_button = QPushButton("Calculate Remaining values")
         table_button.addWidget(self.calculate_button)
         table_button.addWidget(self.upload_button)
         table_button.addWidget(self.start_logging)
@@ -162,15 +161,6 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(group_box4)
         left_layout.addStretch()
 
-        # Reference Values
-        ref_box = QGroupBox("Reference Values")
-        ref_layout = QFormLayout()
-        self.abs_frequency = QLineEdit()
-        self.abs_resistance = QLineEdit()
-        ref_layout.addRow("Absolute Frequency:", self.abs_frequency)
-        ref_layout.addRow("Absolute Resistance:", self.abs_resistance)
-        ref_box.setLayout(ref_layout)
-        left_layout.addWidget(ref_box)
 
         # Data Acquisition group
         group_box1 = QGroupBox("Data Acquisition")
@@ -254,7 +244,6 @@ class MainWindow(QMainWindow):
         self.rescan_button.clicked.connect(self.rescan_button_clicked)
         self.button_action8.triggered.connect(self.insert_button_clicked)
         self.upload_button.clicked.connect(self.upload_button_clicked)
-        self.calculate_button.clicked.connect(self.calculate_remaining_values)
         self.start_logging.clicked.connect(self.start_logging_button)
         self.stop_logging.clicked.connect(self.stop_logging_button)
         self.update_button.clicked.connect(self.update_buttons)
@@ -288,20 +277,7 @@ class MainWindow(QMainWindow):
                 return
 
 
-    def calculate_remaining_values(self):
-        try:
-            self.data["Rel Frequency"] = pd.to_numeric(self.data["Frequency(Hz)"], errors='coerce') - float(self.abs_frequency.text())
-            self.data["Rel Resistance"] = pd.to_numeric(self.data["Resistance(Ω)"], errors='coerce') - float(self.abs_resistance.text())
 
-            self.model = TableModel(self.data)
-            self.model.dataChanged.connect(self.update_plot)
-            self.table.setModel(self.model)
-
-            self.update_plot()
-
-
-        except Exception as e:
-            QMessageBox.warning(self, "Calculation Error", str(e))
 
     def start_logging_button(self):
         try:
