@@ -1,6 +1,6 @@
 import sys
 import os
-sys.path.inert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtGui
 import numpy as np
