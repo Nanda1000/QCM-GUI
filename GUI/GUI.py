@@ -633,11 +633,15 @@ class MainWindow(QMainWindow):
                     
                     #Fit BVD
                     try:
-                        self.rm_edit.setText(f"{self.Rm:.6f}")
-                        self.lm_edit.setText(f"{self.Lm:.6e}")
-                        self.cm_edit.setText(f"{self.Cm:.6e}")
-                        self.c0_edit.setText(f"{self.C0:.6e}")
-                        self.f_edit.setText(f"{self.fs:.2f}")
+                        
+                        if all(hasattr(self, attr) for attr in ["Rm", "Lm", "Cm", "C0", "fs"]):
+                            self.rm_edit.setText(f"{self.Rm:.6f}")
+                            self.lm_edit.setText(f"{self.Lm:.6e}")
+                            self.cm_edit.setText(f"{self.Cm:.6e}")
+                            self.c0_edit.setText(f"{self.C0:.6e}")
+                            self.f_edit.setText(f"{self.fs:.2f}")
+                        else:
+                            raise AttributeError("Please connect the instrument or enter the values manually")
                         if self.fit_btn.isEnabled():
                             # Perform the fit
                             popt = fit_data(t_seconds[mask_f], F[mask_f], R[mask_r])
