@@ -22,25 +22,25 @@ There are some key formulas to use, Below are the ones
 """
 
 def butterworth(fs, Rm, Lm, Cm, C0):
-    #frequency need to be entered as the value can be obtained from where impedance is minimum tat is magnitude of S11
+    #frequency need to be entered as the value can be obtained from where impedance is minimum  is magnitude of S11
     
     w = 2 * np.pi * fs
     j = 1j
     
-    # Add protection against division by zero
+
     if np.any(w == 0):
-        w = np.where(w == 0, 1e-12, w)  # Replace zeros with small value
+        w = np.where(w == 0, 1e-12, w)  
     if np.any(Cm == 0):
-        Cm = np.where(Cm == 0, 1e-12, Cm)  # Replace zeros with small value
+        Cm = np.where(Cm == 0, 1e-12, Cm)  
     if np.any(C0 == 0):
-        C0 = np.where(C0 == 0, 1e-12, C0)  # Replace zeros with small value
+        C0 = np.where(C0 == 0, 1e-12, C0) 
     
     Zm = Rm + j * w * Lm + 1 / (j * w * Cm)
     Z0 = 1 / (j * w * C0)
     
     #Parallel 
     Y = 1/Zm + 1/Z0
-    # Protect against division by zero in Y
+
     Y = np.where(Y == 0, 1e-12, Y)
     Z_tot = 1/Y
     return Z_tot

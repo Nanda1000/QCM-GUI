@@ -84,8 +84,13 @@ class MainWindow(QMainWindow):
         file_menu.addMenu("Share")
         edit_menu = menu.addMenu("&Edit")
         view_menu = menu.addMenu("&View")
-        self.button_action8 = QAction("Add Table", self)
-        view_menu.addAction(self.button_action8)
+        submenu = view_menu.addMenu("Add Table")
+        self.button_action9 = submenu.addAction(QAction("Insert Row", self))
+        self.button_action10 = submenu.addAction(QAction("Delete Row", self))
+        self.button_action8 = submenu.addAction(QAction("Insert 10-Row Table", self))
+
+        view_menu.addAction(self.button_action9)
+        view_menu.addAction(self.button_action10)
 
         self.setStatusBar(QStatusBar(self))
 
@@ -255,6 +260,10 @@ class MainWindow(QMainWindow):
         self.update_button.clicked.connect(self.update_buttons)
         self.crystallization_action.triggered.connect(self.crystallizationdynamicskinetics)
         self.sauerbrey_action.triggered.connect(self.sauerbrey_konazawa)
+        self.button_action9.triggered.connect(self.insert_button_clicked)
+        self.button_action10.triggered.connect(self.insert_button_clicked)
+        
+        
 
         self.rescan_button_clicked()
 
@@ -463,11 +472,11 @@ class MainWindow(QMainWindow):
 
     def insert_button_clicked(self):
         self.data = pd.DataFrame({
-            "Timestamp": ["" for _ in range(10)],
-            "Time": ["" for _ in range(10)],
-            "Frequency(Hz)": ["" for _ in range(10)],
-            "Resistance(Ω)": ["" for _ in range(10)],
-            "Phase": ["" for _ in range(10)]
+            "Timestamp": ["" for _ in range()],
+            "Time": ["" for _ in range()],
+            "Frequency(Hz)": ["" for _ in range()],
+            "Resistance(Ω)": ["" for _ in range()],
+            "Phase": ["" for _ in range()]
         })
         self.model = TableModel(self.data)
         self.model.dataChanged.connect(self.update_plot)

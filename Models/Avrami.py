@@ -1,51 +1,23 @@
-#Avrami fitting model
-
 import numpy as np
 from scipy.optimize import curve_fit
 
-def parameter(freqs, impedance):
-    Z1 = np.abs(impedance)
-    
-    min_index = np.argmin(Z1)
-    
-    ft = freqs[min_index]
-    
-    return ft
-    
-"""Avrami fitting model for crystallization kinetics
-X(t) =  △f(t)/△fmax
-△f(t) = f0 - f(t)
-△fmax = f0 - f_inf
-
-f_inf is the final resonance frequency once the crystallization is complete
-
-X(t) = 1 - exp(-kt^n)
-
-"""
-
-def avrami(f_array, f0, fmax, ft):
-    fmax = min(f_array)
-    fmaxed = f0 - fmax
-    delta_f = f0 - ft
-    if fmaxed == 0:
-        return 0  # Return 0 instead of None
-    return delta_f / fmaxed
-
 def formula(k, n, t):
-    X = 1 - np.exp(-1 * k * t**n)
-    return X
+    return 1 - np.exp(-k * t**n)
 
-#Fitting the model
-
+def compute_X_t(f_array, f0, finf):
+    f_array = np.array(f_array, dtype=float)
+    numerator = f0 - f_array
+    denominator = f0 - finf
+    if denominator == 0:
+        raise ValueError("Initial and final frequencies must not be equal.")
+    X_t = numerator / denominator
+    X_t = np.clip(X_t, 0, 1)
+    return X_t
 
 def fit(t, f_array):
     f0 = f_array[0]
-    f_max = f_array[-1]
-    X_t = []
-    for ft in f_array:
-        X_val = avrami(f_array, f0, f_max, ft)
-        X_t.append(X_val if X_val is not None else 0)
-    X_t = np.array(X_t)
-    pop, _ = curve_fit(formula, t, X_t, p0=[1e-4, 1.0])
-    return pop
-    
+    finf = f_array[-1]
+
+    X_t = compute_X_t(f_array, f0, finf)
+    popt, _ = curve_fit(formula, t, X_t, p0=[1e-4, 1.0], bounds=(0, np.inf))
+    return popt
