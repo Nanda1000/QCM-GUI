@@ -597,17 +597,24 @@ class MainWindow(QMainWindow):
                     mask_p = timestamps.notnull() & P.notnull()
                     self.plot_phase.plot(t_seconds[mask_p], P[mask_p], pen='c', symbol='t', symbolBrush='b')
 
-                    # Fit Avrami
-                    try:
-                        popt = fit(t_seconds, F)
-                        k_val, n_val = popt
-                        self.k_edit.setText(f"{k_val:.4e}")
-                        self.n_edit.setText(f"{n_val:.2f}")
-                        X_t = formula(k_val, n_val, t_seconds)
-                        self.plot_crystallization_fraction.plot(t_seconds, X_t, pen='m')
-                        QMessageBox.information(self.crystallization_widget, "Avrami Fit", f"Crystallization Rate k: {k_val:.4e}, Exponent n: {n_val:.2f}")
-                    except Exception as e:
-                        QMessageBox.warning(self.crystallization_widget, "Avrami Fit Error", str(e))
+                    # Fit Avrami - only if we have sufficient data
+                    if len(t_seconds) > 3 and len(F) > 3:
+                        try:
+                            # Use first and last frequency values as defaults
+                            f0_default = F.iloc[0] if not F.empty else 0
+                            finf_default = F.iloc[-1] if not F.empty else 0
+                            
+                            popt = fit(t_seconds, F, f0_default, finf_default)
+                            k_val, n_val = popt
+                            self.k_edit.setText(f"{k_val:.4e}")
+                            self.n_edit.setText(f"{n_val:.2f}")
+                            
+                            # Plot the fitted curve
+                            X_t = formula(t_seconds, k_val, n_val)
+                            self.plot_crystallization_fraction.plot(t_seconds, X_t, pen='m')
+                            QMessageBox.information(self.crystallization_widget, "Avrami Fit", f"Crystallization Rate k: {k_val:.4e}, Exponent n: {n_val:.2f}")
+                        except Exception as e:
+                            QMessageBox.warning(self.crystallization_widget, "Avrami Fit Error", str(e))
 
                 except Exception as e:
                     QMessageBox.warning(self.crystallization_widget, "Plotting Error", str(e))
@@ -623,29 +630,65 @@ class MainWindow(QMainWindow):
             t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
             freqs = pd.to_numeric(self.data["Frequency(Hz)"], errors="coerce")
 
-            if not self.f0_edit.text() or not self.finf_edit.text():
-                QMessageBox.warning(self, "Input Error", "Please enter both Initial Frequency (f₀) and Final Frequency (f_inf).")
+            # Remove any NaN values
+            valid_mask = timestamps.notnull() & freqs.notnull()
+            if not valid_mask.any():
+                QMessageBox.warning(self, "Data Error", "No valid time and frequency data found.")
+                return
+                
+            t_seconds_clean = t_seconds[valid_mask]
+            freqs_clean = freqs[valid_mask]
+
+            if len(t_seconds_clean) < 3:
+                QMessageBox.warning(self, "Data Error", "Need at least 3 valid data points for Avrami fitting.")
                 return
 
-            try:
-                f0 = float(self.f0_edit.text())
-                finf = float(self.finf_edit.text())
-            except ValueError:
-                QMessageBox.warning(self, "Input Error", "Initial and Final Frequency must be valid numbers.")
-                return
+            # Get f0 and finf from user input, or use data defaults
+            f0 = None
+            finf = None
+            
+            if self.f0_edit.text().strip():
+                try:
+                    f0 = float(self.f0_edit.text())
+                except ValueError:
+                    QMessageBox.warning(self, "Input Error", "Initial Frequency (f₀) must be a valid number.")
+                    return
+            
+            if self.finf_edit.text().strip():
+                try:
+                    finf = float(self.finf_edit.text())
+                except ValueError:
+                    QMessageBox.warning(self, "Input Error", "Final Frequency (f_inf) must be a valid number.")
+                    return
 
-            if len(t_seconds) != len(freqs):
-                raise Exception("Mismatched time and frequency lengths")
-
-            X_t = compute_X_t(freqs, f0, finf)
-
-
-            k, n = fit(t_seconds, freqs)
+            # Perform Avrami fit
+            k, n = fit(t_seconds_clean, freqs_clean, f0, finf)
+            
+            # Update the input fields with fitted parameters
             self.k_edit.setText(f"{k:.4e}")
             self.n_edit.setText(f"{n:.2f}")
+            
+            # If f0 and finf weren't provided, update them with the values used
+            if not self.f0_edit.text().strip():
+                actual_f0 = freqs_clean.iloc[0] if f0 is None else f0
+                self.f0_edit.setText(f"{actual_f0:.2f}")
+            if not self.finf_edit.text().strip():
+                actual_finf = freqs_clean.iloc[-1] if finf is None else finf
+                self.finf_edit.setText(f"{actual_finf:.2f}")
 
-            X_fit = formula(k, n, t_seconds)
-            self.plot_crystallization_fraction.plot(t_seconds, X_fit, pen='m')
+            # Clear previous plot and plot the fitted curve
+            self.plot_crystallization_fraction.clear()
+            X_fit = formula(t_seconds_clean, k, n)
+            self.plot_crystallization_fraction.plot(t_seconds_clean, X_fit, pen='m', name='Avrami Fit')
+            
+            # Also plot the actual crystallization fraction data points
+            actual_f0 = f0 if f0 is not None else freqs_clean.iloc[0]
+            actual_finf = finf if finf is not None else freqs_clean.iloc[-1]
+            X_data = compute_X_t(freqs_clean, actual_f0, actual_finf)
+            self.plot_crystallization_fraction.plot(t_seconds_clean, X_data, pen=None, symbol='o', symbolBrush='b', name='Data')
+            
+            QMessageBox.information(self, "Avrami Fit Success", 
+                                  f"Crystallization Rate k: {k:.4e}\nAvrami Exponent n: {n:.2f}")
 
         except Exception as e:
             QMessageBox.warning(self, "Avrami Fit Error", str(e))
