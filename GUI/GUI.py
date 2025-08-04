@@ -537,21 +537,15 @@ class MainWindow(QMainWindow):
 
             self.plot_resistance = pg.PlotWidget()
             self.plot_resistance.setTitle("Motional Resistance vs Time")
-            self.plot_resistance.setLabel("left", "Resistance (Ω)")
+            self.plot_resistance.setLabel("left", "Motional Resistance (Ω)")
             self.plot_resistance.setLabel("bottom", "Time (s)")
             plot_layout.addWidget(self.plot_resistance)
 
             self.plot_frequency = pg.PlotWidget()
             self.plot_frequency.setTitle("Resonance Frequency vs Time")
-            self.plot_frequency.setLabel("left", "Frequency (Hz)")
+            self.plot_frequency.setLabel("left", "Resonance Frequency (Hz)")
             self.plot_frequency.setLabel("bottom", "Time (s)")
             plot_layout.addWidget(self.plot_frequency)
-
-            self.plot_phase = pg.PlotWidget()
-            self.plot_phase.setTitle("Phase vs Time")
-            self.plot_phase.setLabel("left", "Phase (degrees)")
-            self.plot_phase.setLabel("bottom", "Time (s)")
-            plot_layout.addWidget(self.plot_phase)
 
             self.plot_crystallization_fraction = pg.PlotWidget()
             self.plot_crystallization_fraction.setTitle("Crystallization Fraction X(t) vs Time")
@@ -620,16 +614,13 @@ class MainWindow(QMainWindow):
 
                     R = pd.to_numeric(self.data["Resistance(Ω)"], errors="coerce")
                     F = pd.to_numeric(self.data["Frequency(Hz)"], errors="coerce")
-                    P = pd.to_numeric(self.data["Phase"], errors="coerce")
 
                     mask_r = timestamps.notnull() & R.notnull()
-                    self.plot_resistance.plot(t_seconds[mask_r], R[mask_r], pen='r', symbol='o', symbolBrush='b')
+                    self.plot_resistance.plot(t_seconds[mask_r], self.Rm, pen='r', symbol='o', symbolBrush='b')
 
                     mask_f = timestamps.notnull() & F.notnull()
-                    self.plot_frequency.plot(t_seconds[mask_f], F[mask_f], pen='g', symbol='x', symbolBrush='b')
+                    self.plot_frequency.plot(t_seconds[mask_f], self.fs, pen='g', symbol='x', symbolBrush='b')
 
-                    mask_p = timestamps.notnull() & P.notnull()
-                    self.plot_phase.plot(t_seconds[mask_p], P[mask_p], pen='c', symbol='t', symbolBrush='b')
                     
                     #Fit BVD
                     try:
