@@ -17,7 +17,6 @@ def compute_X_t(f_array, f0, finf):
 def fit(t, f_array):
     f0 = f_array[0]
     finf = f_array[-1]
-
     X_t = compute_X_t(f_array, f0, finf)
     popt, _ = curve_fit(formula, t, X_t, p0=[1e-4, 1.0], bounds=(0, np.inf))
     return popt
