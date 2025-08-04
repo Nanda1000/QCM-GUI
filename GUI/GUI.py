@@ -219,8 +219,8 @@ class MainWindow(QMainWindow):
         self.resistance = np.zeros_like(self.freqs)
         self.phase = np.zeros_like(self.freqs)
         self.time_array = np.linspace(0, 10, len(self.freqs))
-        self.fs = 0
-        self.Rm = 0
+        self.fs = []
+        self.Rm = []
 
 
         # Avrami calculation
@@ -305,8 +305,8 @@ class MainWindow(QMainWindow):
 
     def start_logging_button(self):
         try:
-            if not self.abs_frequency.text() or not self.abs_resistance.text():
-                QMessageBox.warning(self, "Missing Reference", "Please enter the Absolute Frequency and Absolute Resistance before starting logging.")
+            if self.sweep_points.text():
+                QMessageBox.warning(self, "Missing Reference", "Please enter the sweep points before starting logging.")
                 return
             self.timer.start(2000)
             self.start_logging.setEnabled(False)
@@ -363,6 +363,9 @@ class MainWindow(QMainWindow):
                 "Resistance(Ω)": r,
                 "Phase": 0
             } for f, r in zip(freqs, resistances)]
+            
+            self.rm.append(Rm)
+            self.fs.append(fs)
 
             self.data = pd.concat([self.data, pd.DataFrame(rows)], ignore_index=True)
             self.model = TableModel(self.data)
@@ -506,6 +509,8 @@ class MainWindow(QMainWindow):
             self.model = TableModel(self.data)
             self.model.dataChanged.connect(self.update_plot)
             self.table.setModel(self.model)
+            
+            self.sweep_points.setText("1")
 
             self.update_plot()
         except Exception as e:
@@ -609,18 +614,50 @@ class MainWindow(QMainWindow):
             # Plot data from main table
             if not self.data.empty:
                 try:
-                    timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
-                    t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
+                    points = int(self.sweep_points.text() or "201")
+                    total_rows = len(self.data)
+                
+                    
+                    
 
-                    R = pd.to_numeric(self.data["Resistance(Ω)"], errors="coerce")
-                    F = pd.to_numeric(self.data["Frequency(Hz)"], errors="coerce")
+                    if points > 1 and total_rows % points != 0:
+                      QMessageBox.warning(self, "Data Error", "Data length is not divisible by number of sweep points.")
+                      return
 
-                    mask_r = timestamps.notnull() & R.notnull()
-                    self.plot_resistance.plot(t_seconds[mask_r], self.Rm, pen='r', symbol='o', symbolBrush='b')
+                    # Extract average time per sweep
+                    num_sweeps = total_rows // points
+                    if num_sweeps == 0:
+                        QMessageBox.warning(self, "Data Error", "No data available for plotting.")
+                        return
+                    t_seconds = []
+                    rm_values = []
+                    fs_values = []
+                    for i in range(num_sweeps):
+                      start = i * points_per_sweep
+                      end = start + points_per_sweep
+                      sweep = self.data.iloc[start:end]
+                      freq = sweep["Frequency(Hz)"].to_numpy()
+                      res = sweep["Resistance(Ω)"].to_numpy()
+                      F = pd.to_numeric(freq, errors='coerce')
+                      R = pd.to_numeric(res, errors='coerce')
+                      
+                      params = parameter(F, R)
+                      Rm = params["Rm"]
+                      rm_values.append(Rm)
+                      fs = params["fs"]
+                      fs_values.append(fs)
+                      ts = pd.to_datetime(self.data["Timestamp"].iloc[start:end], errors="coerce")
+                      avg_time = (ts - ts.min()).dt.total_seconds().mean()
+                      t_seconds.append(avg_time)
 
-                    mask_f = timestamps.notnull() & F.notnull()
-                    self.plot_frequency.plot(t_seconds[mask_f], self.fs, pen='g', symbol='x', symbolBrush='b')
+                    
+                    t_seconds = np.array(t_seconds)
 
+                    self.plot_resistance.plot(t_seconds, rm_values, pen='b', symbol='o', symbolSize=5, symbolBrush='r', name='Motional Resistance')
+                    self.plot_frequency.plot(t_seconds, fs_values, pen='r', symbol='o', symbolSize=5, symbolBrush='g', name='Resonance Frequency')
+
+
+                
                     
                     #Fit BVD
                     try:
