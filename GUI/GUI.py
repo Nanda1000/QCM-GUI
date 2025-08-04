@@ -1,4 +1,6 @@
 import sys
+import os
+sys.path.inert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtGui
 import numpy as np
@@ -84,13 +86,8 @@ class MainWindow(QMainWindow):
         file_menu.addMenu("Share")
         edit_menu = menu.addMenu("&Edit")
         view_menu = menu.addMenu("&View")
-        submenu = view_menu.addMenu("Add Table")
-        self.button_action8 = submenu.QAction("Insert Table", self)
-        self.button_action9 = submenu.QAction("Insert Row", self)
-        self.button_action10 = submenu.QAction("Insert Column", self)
-        submenu.addAction(self.button_action8)
-        submenu.addAction(self.button_action9)
-        submenu.addAction(self.button_action10)
+        self.button_action8 = QAction("Add Table", self)
+        view_menu.addAction(self.button_action8)
         
 
         self.setStatusBar(QStatusBar(self))
@@ -458,7 +455,44 @@ class MainWindow(QMainWindow):
         self.model = TableModel(self.data)
         self.model.dataChanged.connect(self.update_plot)
         self.table.setModel(self.model)
-
+        
+        self.button1 = QPushButton("Insert Row")
+        self.button1.clicked.connect(self.insert_row)
+        self.button2 = QPushButton("Delete Row")
+        self.button2.clicked.connect(self.delete_row)
+        
+    def insert_row(self):
+        new_row = pd.DataFrame({
+            "Timestamp": [""],
+            "Frequency": [""],
+            "Resistance(Ω)": [""],
+            "Phase": [""]
+        })
+        curr_row = self.table.currentRow()
+        if curr_row == -1:
+            self.data = pd.concat([self.data, new_row], ignore_index=True)
+        else:
+            top = self.data.iloc[:curr_row + 1]
+            bottom= self.data.iloc[curr_row + 1:]
+            self.data = pd.concat([top, new_row, bottom], ignore_index=True)
+            
+        
+            
+    def delete_row(self):
+        curr_row = self.table.currentRow().row()
+        if curr_row < 0:
+            return QMessageBox.warning("Please select a Row to delete", self)
+        button = QMessageBox.question(self, "Are you sure, You want to Delete this row", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if button == QMessageBox.StandardButton.Yes:
+            self.data = self.data.drop(index=curr_row).reset_index(drop=True)
+            
+            self.model = TableModel(self.data)
+            self.model.dataChanged.connect(self.update_plot)
+            self.table.setModel(self.model)
+            
+            
+            
+            
 
     def upload_button_clicked(self):
         file, _ = QFileDialog.getOpenFileName(self, "Select File", "", "CSV (*.csv);;Excel (*.xlsx)")

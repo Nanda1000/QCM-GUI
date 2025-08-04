@@ -5,7 +5,7 @@ import serial.tools.list_ports
 from scipy.optimize import least_squares
 from scipy.interpolate import UnivariateSpline
 import pyqtgraph as pg
-from test.test import acquire_data
+from VNA_Data.Acquire_data import acquire_data
 
 """Some of the key parameters to find the motional resistance(damping/viscosity effect)
 Resonance Frequency which can tell about mass loading effect and for the full modeling
