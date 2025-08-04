@@ -630,6 +630,28 @@ class MainWindow(QMainWindow):
 
                     mask_p = timestamps.notnull() & P.notnull()
                     self.plot_phase.plot(t_seconds[mask_p], P[mask_p], pen='c', symbol='t', symbolBrush='b')
+                    
+                    #Fit BVD
+                    try:
+                        self.rm_edit.setText(f"{self.Rm:.6f}")
+                        self.lm_edit.setText(f"{self.Lm:.6e}")
+                        self.cm_edit.setText(f"{self.Cm:.6e}")
+                        self.c0_edit.setText(f"{self.C0:.6e}")
+                        self.f_edit.setText(f"{self.fs:.2f}")
+                        if self.fit_btn.isEnabled():
+                            # Perform the fit
+                            popt = fit_data(t_seconds[mask_f], F[mask_f], R[mask_r])
+                            self.rm_edit.setText(f"{popt[0]:.6f}")
+                            self.lm_edit.setText(f"{popt[1]:.6e}")
+                            self.cm_edit.setText(f"{popt[2]:.6e}")
+                            self.c0_edit.setText(f"{popt[3]:.6e}")
+                            self.f_edit.setText(f"{popt[4]:.2f}")
+                            self.plot_resistance.plot(t_seconds[mask_r], butterworth(F[mask_f], *popt), pen='m', name='BVD Fit')
+                            QMessageBox.information(self.crystallization_widget, "BVD Fit", "BVD Model Fitting completed successfully!")
+                    except Exception as e:
+                        QMessageBox.warning(self.crystallization_widget, "BVD Fit Error", str(e))
+                        
+                    
 
                     # Fit Avrami
                     try:

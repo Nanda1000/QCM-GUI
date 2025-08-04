@@ -35,14 +35,14 @@ def validate_data(t, f_array):
     f_clean = f_array[mask]
     
     if len(t_clean) < 3:
-        raise ValueError("Insufficient data points for fitting (need at least 3)")
+        raise ValueError("Insufficient data points for fitting (need at least 3 points)")
     
     # Check for monotonic behavior (frequency should generally decrease during crystallization)
     if len(f_clean) > 3:
         # Check if frequency changes significantly
         freq_range = np.max(f_clean) - np.min(f_clean)
         if freq_range < 1e-6:
-            raise ValueError("Frequency data shows insufficient variation for meaningful fitting")
+            raise ValueError("Frequency data shows insufficient variation for Better fitting")
     
     return t_clean, f_clean
 
@@ -79,7 +79,7 @@ def fit(t, f_array):
     # n: typically between 0.5 and 4
     bounds = ([1e-10, 0.1], [1e-1, 10.0])
     
-    # Initial guess: k = 1e-4, n = 1.0
+    # Initial guess:
     p0 = [1e-4, 1.0]
     
     try:
