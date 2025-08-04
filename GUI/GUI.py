@@ -599,7 +599,12 @@ class MainWindow(QMainWindow):
 
                     # Fit Avrami
                     try:
-                        popt = fit(t_seconds, F)
+                        valid_mask = (~np.isnan(t_seconds)) & (~np.isnan(F))
+                        t_valid = t_seconds[valid_mask]
+                        F_valid = F[valid_mask]
+                        if len(t_valid) < 3:
+                            raise ValueError("Not enough valid data points for Avrami fit.")
+                        popt = fit(t_valid.to_numpy(), F_valid.to_numpy())
                         k_val, n_val = popt
                         self.k_edit.setText(f"{k_val:.4e}")
                         self.n_edit.setText(f"{n_val:.2f}")
@@ -637,10 +642,17 @@ class MainWindow(QMainWindow):
             if len(t_seconds) != len(freqs):
                 raise Exception("Mismatched time and frequency lengths")
 
-            X_t = compute_X_t(freqs, f0, finf)
+            # Filter out NaN values before computation and fitting
+            valid_mask = (~np.isnan(t_seconds)) & (~np.isnan(freqs))
+            t_valid = t_seconds[valid_mask]
+            freqs_valid = freqs[valid_mask]
+            if len(t_valid) < 3:
+                raise ValueError("Not enough valid data points for Avrami fit.")
+
+            X_t = compute_X_t(freqs_valid, f0, finf)
 
 
-            k, n = fit(t_seconds, freqs)
+            k, n = fit(t_valid.to_numpy(), freqs_valid.to_numpy())
             self.k_edit.setText(f"{k:.4e}")
             self.n_edit.setText(f"{n:.2f}")
 
