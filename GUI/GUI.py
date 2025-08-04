@@ -7,7 +7,7 @@ from scipy.optimize import least_squares
 import pyvisa
 from VNA_Data.Acquire_data import acquire_data
 from Models.Butterworth import half_power_threshold, parameter, fit_data, butterworth
-from Models.Avrami import compute_X_t, fit, formula
+from Models.Avrami import compute_X_t, fit, formula, validate_data_for_avrami
 from Models.Sauerbrey import parameter as sauerbrey_parameter, sauerbrey
 from Models.konazawa import parameter as konazawa_parameter, konazawa
 from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel
@@ -479,6 +479,18 @@ class MainWindow(QMainWindow):
 
     def crystallizationdynamicskinetics(self):
         try:
+            # Check if data has been uploaded
+            if not hasattr(self, 'data') or self.data is None:
+                QMessageBox.warning(self, "Data Error", "Please upload data first before opening crystallization dynamics & kinetics.")
+                return
+            
+            # Check if required columns exist
+            required_columns = ["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Phase"]
+            missing_columns = [col for col in required_columns if col not in self.data.columns]
+            if missing_columns:
+                QMessageBox.warning(self, "Data Error", f"Missing required columns: {', '.join(missing_columns)}")
+                return
+            
             # Create a new window for crystallization dynamics & kinetics
             self.crystallization_widget = QWidget()
             self.crystallization_widget.setWindowTitle("Crystallization Dynamics & Kinetics")
@@ -521,6 +533,8 @@ class MainWindow(QMainWindow):
 
             self.plot_crystallization_fraction = pg.PlotWidget()
             self.plot_crystallization_fraction.setTitle("Crystallization Fraction X(t) vs Time")
+            self.plot_crystallization_fraction.setLabel("left", "Crystallization Fraction X(t)")
+            self.plot_crystallization_fraction.setLabel("bottom", "Time (s)")
             plot_layout.addWidget(self.plot_crystallization_fraction)
 
             # Section: Parameter Inputs
@@ -577,40 +591,37 @@ class MainWindow(QMainWindow):
             main_splitter.addWidget(left_widget)
             main_splitter.addWidget(right_splitter)
             main_layout.addWidget(main_splitter)
-
-            # Plot data from main table
-            if not self.data.empty:
-                try:
-                    timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
-                    t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
-
-                    R = pd.to_numeric(self.data["Resistance(Ω)"], errors="coerce")
-                    F = pd.to_numeric(self.data["Frequency(Hz)"], errors="coerce")
-                    P = pd.to_numeric(self.data["Phase"], errors="coerce")
-
-                    mask_r = timestamps.notnull() & R.notnull()
-                    self.plot_resistance.plot(t_seconds[mask_r], R[mask_r], pen='r', symbol='o', symbolBrush='b')
-
-                    mask_f = timestamps.notnull() & F.notnull()
-                    self.plot_frequency.plot(t_seconds[mask_f], F[mask_f], pen='g', symbol='x', symbolBrush='b')
-
-                    mask_p = timestamps.notnull() & P.notnull()
-                    self.plot_phase.plot(t_seconds[mask_p], P[mask_p], pen='c', symbol='t', symbolBrush='b')
-
-                    # Fit Avrami
-                    try:
-                        popt = fit(t_seconds, F)
-                        k_val, n_val = popt
-                        self.k_edit.setText(f"{k_val:.4e}")
-                        self.n_edit.setText(f"{n_val:.2f}")
-                        X_t = formula(k_val, n_val, t_seconds)
-                        self.plot_crystallization_fraction.plot(t_seconds, X_t, pen='m')
-                        QMessageBox.information(self.crystallization_widget, "Avrami Fit", f"Crystallization Rate k: {k_val:.4e}, Exponent n: {n_val:.2f}")
-                    except Exception as e:
-                        QMessageBox.warning(self.crystallization_widget, "Avrami Fit Error", str(e))
-
-                except Exception as e:
-                    QMessageBox.warning(self.crystallization_widget, "Plotting Error", str(e))
+            
+            # Plot the uploaded data
+            try:
+                timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
+                valid_timestamp_mask = timestamps.notna()
+                timestamps = timestamps[valid_timestamp_mask]
+                t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
+                
+                resistance = pd.to_numeric(self.data["Resistance(Ω)"], errors="coerce")[valid_timestamp_mask]
+                frequency = pd.to_numeric(self.data["Frequency(Hz)"], errors="coerce")[valid_timestamp_mask]
+                phase = pd.to_numeric(self.data["Phase"], errors="coerce")[valid_timestamp_mask]
+                
+                # Remove NaN values
+                valid_mask = resistance.notna() & frequency.notna() & phase.notna()
+                t_clean = t_seconds[valid_mask]
+                resistance_clean = resistance[valid_mask]
+                frequency_clean = frequency[valid_mask]
+                phase_clean = phase[valid_mask]
+                
+                if len(t_clean) > 0:
+                    self.plot_resistance.plot(t_clean, resistance_clean, pen='b', name='Resistance')
+                    self.plot_frequency.plot(t_clean, frequency_clean, pen='r', name='Frequency')
+                    self.plot_phase.plot(t_clean, phase_clean, pen='g', name='Phase')
+                    
+                    # Auto-populate frequency fields if data is available
+                    if len(frequency_clean) > 0:
+                        self.f0_edit.setText(f"{frequency_clean.iloc[0]:.2f}")
+                        self.finf_edit.setText(f"{frequency_clean.iloc[-1]:.2f}")
+                        
+            except Exception as e:
+                print(f"Error plotting data: {e}")
 
             self.crystallization_widget.show()
 
@@ -619,10 +630,62 @@ class MainWindow(QMainWindow):
         
     def fit_data1(self):
         try:
-            timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
-            t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
-            freqs = pd.to_numeric(self.data["Frequency(Hz)"], errors="coerce")
+            # Check if data has been uploaded
+            if not hasattr(self, 'data') or self.data is None:
+                QMessageBox.warning(self, "Data Error", "Please upload data first before performing Avrami fit.")
+                return
+            
+            # Check if required columns exist
+            required_columns = ["Timestamp", "Frequency(Hz)"]
+            missing_columns = [col for col in required_columns if col not in self.data.columns]
+            if missing_columns:
+                QMessageBox.warning(self, "Data Error", f"Missing required columns: {', '.join(missing_columns)}")
+                return
+            
+            # Check if data is not empty
+            if len(self.data) == 0:
+                QMessageBox.warning(self, "Data Error", "No data available for fitting.")
+                return
+            
+            # Convert timestamps to seconds
+            try:
+                timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
+                # Remove rows with invalid timestamps
+                valid_timestamp_mask = timestamps.notna()
+                if not valid_timestamp_mask.any():
+                    QMessageBox.warning(self, "Data Error", "No valid timestamps found in the data.")
+                    return
+                
+                timestamps = timestamps[valid_timestamp_mask]
+                t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
+            except Exception as e:
+                QMessageBox.warning(self, "Timestamp Error", f"Error processing timestamps: {str(e)}")
+                return
+            
+            # Convert frequencies to numeric
+            try:
+                freqs = pd.to_numeric(self.data["Frequency(Hz)"], errors="coerce")
+                # Remove rows with invalid frequencies
+                valid_freq_mask = freqs.notna()
+                if not valid_freq_mask.any():
+                    QMessageBox.warning(self, "Data Error", "No valid frequency values found in the data.")
+                    return
+                
+                freqs = freqs[valid_freq_mask]
+            except Exception as e:
+                QMessageBox.warning(self, "Frequency Error", f"Error processing frequency data: {str(e)}")
+                return
+            
+            # Ensure we have matching valid data
+            if len(t_seconds) != len(freqs):
+                QMessageBox.warning(self, "Data Error", f"Mismatched time ({len(t_seconds)}) and frequency ({len(freqs)}) data lengths.")
+                return
+            
+            if len(t_seconds) < 3:
+                QMessageBox.warning(self, "Data Error", "At least 3 data points are required for Avrami fitting.")
+                return
 
+            # Validate user inputs
             if not self.f0_edit.text() or not self.finf_edit.text():
                 QMessageBox.warning(self, "Input Error", "Please enter both Initial Frequency (f₀) and Final Frequency (f_inf).")
                 return
@@ -633,22 +696,52 @@ class MainWindow(QMainWindow):
             except ValueError:
                 QMessageBox.warning(self, "Input Error", "Initial and Final Frequency must be valid numbers.")
                 return
+            
+            # Validate frequency values
+            if f0 == finf:
+                QMessageBox.warning(self, "Input Error", "Initial and final frequencies must be different.")
+                return
+            
+            if f0 <= 0 or finf <= 0:
+                QMessageBox.warning(self, "Input Error", "Frequencies must be positive values.")
+                return
 
-            if len(t_seconds) != len(freqs):
-                raise Exception("Mismatched time and frequency lengths")
+            # Validate data quality for Avrami fitting
+            validation = validate_data_for_avrami(t_seconds, freqs, f0, finf)
+            
+            if not validation['is_valid']:
+                error_msg = "Data validation failed:\n" + "\n".join(validation['messages'])
+                QMessageBox.warning(self, "Data Validation Error", error_msg)
+                return
+            
+            if validation['warnings']:
+                warning_msg = "Data quality warnings:\n" + "\n".join(validation['warnings'])
+                QMessageBox.information(self, "Data Quality Warning", warning_msg)
 
-            X_t = compute_X_t(freqs, f0, finf)
+            # Perform the Avrami fit
+            try:
+                k, n = fit(t_seconds, freqs)
+                
+                # Update the UI with results
+                self.k_edit.setText(f"{k:.4e}")
+                self.n_edit.setText(f"{n:.2f}")
+                
+                # Plot the fitted curve
+                X_fit = formula(k, n, t_seconds)
+                self.plot_crystallization_fraction.clear()  # Clear previous plot
+                self.plot_crystallization_fraction.plot(t_seconds, X_fit, pen='m', name='Avrami Fit')
+                
+                # Also plot the actual data points
+                X_actual = compute_X_t(freqs, f0, finf)
+                self.plot_crystallization_fraction.plot(t_seconds, X_actual, pen=None, symbol='o', symbolSize=5, name='Data Points')
+                
+                QMessageBox.information(self, "Avrami Fit Success", f"Fit completed successfully!\nCrystallization Rate k: {k:.4e}\nAvrami Exponent n: {n:.2f}")
 
-
-            k, n = fit(t_seconds, freqs)
-            self.k_edit.setText(f"{k:.4e}")
-            self.n_edit.setText(f"{n:.2f}")
-
-            X_fit = formula(k, n, t_seconds)
-            self.plot_crystallization_fraction.plot(t_seconds, X_fit, pen='m')
+            except Exception as fit_error:
+                QMessageBox.warning(self, "Avrami Fit Error", f"Fitting failed: {str(fit_error)}")
 
         except Exception as e:
-            QMessageBox.warning(self, "Avrami Fit Error", str(e))
+            QMessageBox.warning(self, "Avrami Fit Error", f"Unexpected error: {str(e)}")
         
 
     def fit_data(self):
