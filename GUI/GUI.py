@@ -633,8 +633,8 @@ class MainWindow(QMainWindow):
                     rm_values = []
                     fs_values = []
                     for i in range(num_sweeps):
-                      start = i * points_per_sweep
-                      end = start + points_per_sweep
+                      start = i * points
+                      end = start + points
                       sweep = self.data.iloc[start:end]
                       freq = sweep["Frequency(Hz)"].to_numpy()
                       res = sweep["Resistance(Ω)"].to_numpy()
