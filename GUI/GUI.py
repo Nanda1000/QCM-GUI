@@ -151,7 +151,6 @@ class MainWindow(QMainWindow):
         self.start_logging = QPushButton("Start Logging")
         self.stop_logging = QPushButton("Stop Logging")
         self.upload_button = QPushButton("Upload Data")
-        table_button.addWidget(self.calculate_button)
         table_button.addWidget(self.upload_button)
         table_button.addWidget(self.start_logging)
         table_button.addWidget(self.stop_logging)
