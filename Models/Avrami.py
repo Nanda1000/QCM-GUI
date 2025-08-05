@@ -49,56 +49,33 @@ def validate_data(t, f_array):
 
 
 def fit(t, f_array):
-    """
-    Fit Avrami model to frequency data.
-    
-    Args:
-        t: time array
-        f_array: frequency array
-    
-    Returns:
-        tuple: (k, n) - crystallization rate and Avrami exponent
-    """
-    # Validate and clean data
     t_clean, f_clean = validate_data(t, f_array)
-    
-    
-    # Get initial and final frequencies
+
     f0 = f_clean[0]
     finf = f_clean[-1]
-    
-    if abs(f0 - finf) < 1e-10:
-        raise ValueError("Initial and final frequencies are too close for meaningful fitting")
-    
-    # Compute crystallization fraction
+
+    if abs(f0 - finf) < 1e-8:
+        raise ValueError("f₀ and f_inf are too close. Cannot compute crystallization fraction.")
+
     X_t = compute_X_t(f_clean, f0, finf)
-    
-    # Check if X_t has sufficient variation
-    if np.std(X_t) < 1e-6:
-        raise ValueError("Crystallization fraction shows insufficient variation for fitting")
-    
-    # Set reasonable bounds for k and n
-    # k: typically between 1e-8 and 1e-2
-    # n: typically between 0.5 and 4
+
+    if np.any(np.isnan(X_t)) or np.any(np.isinf(X_t)):
+        raise ValueError("X(t) contains NaN or Inf values.")
+
+    if np.std(X_t) < 1e-4:
+        raise ValueError("Crystallization fraction variation is too low.")
+
     bounds = ([1e-10, 0.1], [1e-1, 10.0])
-    
-    # Initial guess:
-    p0 = [1e-4, 1.0]
-    
+    p0 = [1e-4, 1.0]  # initial guess
+
     try:
-        popt, _ = curve_fit(formula, t_clean, X_t, p0=p0, bounds=bounds, maxfev=10000)
+        popt, _ = curve_fit(formula, t_clean, X_t, p0=p0, bounds=bounds, maxfev=20000)
         k, n = popt
-        
-        # Validate results
+
         if k <= 0 or n <= 0:
-            raise ValueError("Fitted parameters must be positive")
-        
+            raise ValueError("Fitted parameters must be positive.")
         return k, n
-        
     except RuntimeError as e:
-        if "Optimal parameters not found" in str(e):
-            raise ValueError("Failed to converge to optimal parameters. Try different initial values or check data quality.")
-        else:
-            raise ValueError(f"Curve fitting failed: {str(e)}")
+        raise ValueError(f"Fit did not converge: {str(e)}")
     except Exception as e:
         raise ValueError(f"Fitting error: {str(e)}")

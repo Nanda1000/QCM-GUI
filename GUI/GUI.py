@@ -700,36 +700,44 @@ class MainWindow(QMainWindow):
                                 k_values.append(k)
                                 n_values.append(n)
                                 sweep_indices.append(i)
-
                             except ValueError as e:
                                 print(f"Sweep {i} skipped: {e}")
 
+                        F = np.array(fs_values)
+                        t_seconds = np.array(t_seconds)
                         mask_f_valid = np.isfinite(F) & np.isfinite(t_seconds)
+
                         if mask_f_valid.sum() >= 3:
                             t_fit = t_seconds[mask_f_valid]
                             F_fit = F[mask_f_valid]
 
-                            popt = fit(t_fit, F_fit)
-                            k_val, n_val = popt
-                            self.k_edit.setText(f"{k_val:.4e}")
-                            self.n_edit.setText(f"{n_val:.2f}")
+                            try:
+                                k_val, n_val = fit(t_fit, F_fit)
+                                self.k_edit.setText(f"{k_val:.4e}")
+                                self.n_edit.setText(f"{n_val:.2f}")
 
-                            X_t = formula(k_val, n_val, t_seconds)
-                            self.plot_crystallization_fraction.plot(t_seconds, X_t, pen='m')
-                            QMessageBox.information(self.crystallization_widget, "Avrami Fit", f"Crystallization Rate k: {k_val:.4e}, Exponent n: {n_val:.2f}")
+                                X_t = formula(k_val, n_val, t_seconds)
+                                X_actual = compute_X_t(F, F[0], F[-1])
+
+                                self.plot_crystallization_fraction.clear()
+                                self.plot_crystallization_fraction.plot(t_seconds, X_t, pen='m', name='Fitted')
+                                self.plot_crystallization_fraction.plot(t_seconds, X_actual, pen='b', symbol='o', symbolBrush='b', name='Actual')
+                                self.plot_crystallization_fraction.plot(t_sweep, k_values, pen='r', symbol='o', symbolBrush='b', name='kinetic vs time')
+                                self.plot_crystallization_fraction.plot(t_sweep, n_values, pen='g', symbol='o', symbolBrush='b', name='Growth-Rate vs time')
+
+                                QMessageBox.information(self.crystallization_widget, "Avrami Fit", f"Crystallization Rate k: {k_val:.4e}, Exponent n: {n_val:.2f}")
+                            except ValueError as e:
+                                QMessageBox.warning(self.crystallization_widget, "Avrami Fit Error", str(e))
                         else:
-                            QMessageBox.warning(self.crystallization_widget, "Avrami Fit Error", "Insufficient valid frequency data for fitting (need at least 3 points)")
+                            QMessageBox.warning(self.crystallization_widget, "Avrami Fit Error", "Insufficient valid data points for global Avrami fitting.")
                     except Exception as e:
-                             QMessageBox.warning(self.crystallization_widget, "Avrami Fit Error", str(e))
-
-                    self.crystallization_widget.show()
+                        QMessageBox.critical(self.crystallization_widget, "Unexpected Error", str(e))
 
                 except Exception as e:
-                    QMessageBox.critical(self, "Processing Error", f"Unexpected error: {str(e)}")
-
-
+                     QMessageBox.warning(self, "Window Error", str(e))
         except Exception as e:
             QMessageBox.warning(self, "Window Error", str(e))
+            
     
     def _validate_avrami_data(self, timestamps, freqs):
         """
