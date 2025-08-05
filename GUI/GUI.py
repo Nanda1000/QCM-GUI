@@ -209,7 +209,7 @@ class MainWindow(QMainWindow):
         self.phase = np.zeros_like(self.freqs)
         self.time_array = np.linspace(0, 10, len(self.freqs))
         self.fs = []
-        self.Rm = []
+        self.rm = []
 
 
         # Avrami calculation
@@ -591,99 +591,142 @@ class MainWindow(QMainWindow):
                 try:
                     points = int(self.sweep_points.text() or "201")
                     total_rows = len(self.data)
-                
-                    
-                    
 
                     if points > 1 and total_rows % points != 0:
-                      QMessageBox.warning(self, "Data Error", "Data length is not divisible by number of sweep points.")
-                      return
+                        QMessageBox.warning(self, "Data Error", "Data length is not divisible by number of sweep points.")
+                        return
 
-                    # Extract average time per sweep
                     num_sweeps = total_rows // points
                     if num_sweeps == 0:
                         QMessageBox.warning(self, "Data Error", "No data available for plotting.")
                         return
+
                     t_seconds = []
                     rm_values = []
                     fs_values = []
+
                     for i in range(num_sweeps):
-                      start = i * points
-                      end = start + points
-                      sweep = self.data.iloc[start:end]
-                      freq = sweep["Frequency(Hz)"].to_numpy()
-                      res = sweep["Resistance(Ω)"].to_numpy()
-                      F = pd.to_numeric(freq, errors='coerce')
-                      R = pd.to_numeric(res, errors='coerce')
-                      
-                      params = parameter(F, R)
-                      Rm = params["Rm"]
-                      rm_values.append(Rm)
-                      fs = params["fs"]
-                      fs_values.append(fs)
-                      ts = pd.to_datetime(self.data["Timestamp"].iloc[start:end], errors="coerce")
-                      avg_time = (ts - ts.min()).dt.total_seconds().mean()
-                      t_seconds.append(avg_time)
+                        start = i * points
+                        end = start + points
+                        sweep = self.data.iloc[start:end]
 
-                    
+                        freq = pd.to_numeric(sweep["Frequency(Hz)"].to_numpy(), errors='coerce')
+
+                        if "Resistance(Ω)" in sweep.columns and "Reactance(Ω)" in sweep.columns:
+                            resistance = pd.to_numeric(sweep["Resistance(Ω)"], errors='coerce')
+                            reactance = pd.to_numeric(sweep["Reactance(Ω)"], errors='coerce')
+                            impedance = resistance + 1j * reactance
+                        elif "Impedance(Ω)" in sweep.columns:
+                            impedance = pd.to_numeric(sweep["Impedance(Ω)"], errors='coerce')
+                            resistance = impedance.real
+                        else:
+                            QMessageBox.warning(self, "Data Error", "No valid impedance data found for fitting.")
+                            return
+
+                        try:
+                            Rm, Lm, Cm, C0, fs = parameter(freq, impedance, resistance)
+                        except Exception as e:
+                            QMessageBox.warning(self, "Fitting Error", f"Error in parameter extraction at sweep {i+1}: {str(e)}")
+                            continue
+
+                        self.Rm, self.Lm, self.Cm, self.C0, self.fs = Rm, Lm, Cm, C0, fs
+
+                        rm_values.append(Rm)
+                        fs_values.append(fs)
+
+                        ts = pd.to_datetime(sweep["Timestamp"], errors="coerce")
+                        avg_time = (ts - ts.min()).dt.total_seconds().mean() if ts.notna().all() else i
+                        t_seconds.append(avg_time)
+
+                    # Convert to arrays
                     t_seconds = np.array(t_seconds)
+                    F = np.array(fs_values)
+                    R = np.array(rm_values)
+                    timestamps = np.array(t_seconds)
 
+                    # Plot
+                    self.plot_resistance.clear()
                     self.plot_resistance.plot(t_seconds, rm_values, pen='b', symbol='o', symbolSize=5, symbolBrush='r', name='Motional Resistance')
+
+                    self.plot_frequency.clear()
                     self.plot_frequency.plot(t_seconds, fs_values, pen='r', symbol='o', symbolSize=5, symbolBrush='g', name='Resonance Frequency')
 
+                    # Set fitted values in UI
+                    if hasattr(self, "Rm"):
+                        self.rm_edit.setText(f"{self.Rm:.6f}")
+                        self.lm_edit.setText(f"{self.Lm:.6e}")
+                        self.cm_edit.setText(f"{self.Cm:.6e}")
+                        self.c0_edit.setText(f"{self.C0:.6e}")
+                        self.f_edit.setText(f"{self.fs:.2f}")
+                    else:
+                        raise AttributeError("Parameters not available for BVD fit.")
 
-                
-                    
-                    #Fit BVD
-                    try:
-                        
-                        if all(hasattr(self, attr) for attr in ["Rm", "Lm", "Cm", "C0", "fs"]):
-                            self.rm_edit.setText(f"{self.Rm:.6f}")
-                            self.lm_edit.setText(f"{self.Lm:.6e}")
-                            self.cm_edit.setText(f"{self.Cm:.6e}")
-                            self.c0_edit.setText(f"{self.C0:.6e}")
-                            self.f_edit.setText(f"{self.fs:.2f}")
-                        else:
-                            raise AttributeError("Please connect the instrument or enter the values manually")
-                        if self.fit_btn.isEnabled():
-                            # Perform the fit
-                            popt = fit_data(t_seconds[mask_f], F[mask_f], R[mask_r])
-                            self.rm_edit.setText(f"{popt[0]:.6f}")
-                            self.lm_edit.setText(f"{popt[1]:.6e}")
-                            self.cm_edit.setText(f"{popt[2]:.6e}")
-                            self.c0_edit.setText(f"{popt[3]:.6e}")
-                            self.f_edit.setText(f"{popt[4]:.2f}")
-                            self.plot_resistance.plot(t_seconds[mask_r], butterworth(F[mask_f], *popt), pen='m', name='BVD Fit')
-                            QMessageBox.information(self.crystallization_widget, "BVD Fit", "BVD Model Fitting completed successfully!")
-                    except Exception as e:
-                        QMessageBox.warning(self.crystallization_widget, "BVD Fit Error", str(e))
-                        
-                    
+                    # BVD fitting (optional)
+                    if self.fit_btn.isEnabled():
+                        try:
+                           mask_f = np.isfinite(F)
+                           mask_r = np.isfinite(R)
 
-                    # Fit Avrami
+                           popt = fit_data(t_seconds[mask_f], F[mask_f], R[mask_r])
+                           self.rm_edit.setText(f"{popt[0]:.6f}")
+                           self.lm_edit.setText(f"{popt[1]:.6e}")
+                           self.cm_edit.setText(f"{popt[2]:.6e}")
+                           self.c0_edit.setText(f"{popt[3]:.6e}")
+                           self.f_edit.setText(f"{popt[4]:.2f}")
+                           self.plot_resistance.plot(t_seconds[mask_r], butterworth(F[mask_f], *popt), pen='m', name='BVD Fit')
+                           QMessageBox.information(self.crystallization_widget, "BVD Fit", "BVD Model Fitting completed successfully!")
+                        except Exception as e:
+                            QMessageBox.warning(self.crystallization_widget, "BVD Fit Error", str(e))
+
+                    # Avrami fitting
                     try:
-                        # Only fit if we have valid frequency data
-                        mask_f_valid = timestamps.notnull() & F.notnull()
-                        if mask_f_valid.sum() >= 3:  # Need at least 3 points for fitting
+                        points = int(self.sweep_points.text() or "201")
+                        total_rows = len(self.data)
+                        num_sweeps = total_rows // points
+
+                        k_values = []
+                        n_values = []
+                        sweep_indices = []
+
+                        for i in range(num_sweeps):
+                            start = i * points
+                            end = start + points
+
+                            t_sweep = self.data['Time'][start:end]
+                            freq_sweep = self.data['Frequency'][start:end]
+
+                            try:
+                                k, n = fit(t_sweep, freq_sweep)
+                                k_values.append(k)
+                                n_values.append(n)
+                                sweep_indices.append(i)
+
+                            except ValueError as e:
+                                print(f"Sweep {i} skipped: {e}")
+
+                        mask_f_valid = np.isfinite(F) & np.isfinite(t_seconds)
+                        if mask_f_valid.sum() >= 3:
                             t_fit = t_seconds[mask_f_valid]
                             F_fit = F[mask_f_valid]
-                            
+
                             popt = fit(t_fit, F_fit)
                             k_val, n_val = popt
                             self.k_edit.setText(f"{k_val:.4e}")
                             self.n_edit.setText(f"{n_val:.2f}")
+
                             X_t = formula(k_val, n_val, t_seconds)
                             self.plot_crystallization_fraction.plot(t_seconds, X_t, pen='m')
                             QMessageBox.information(self.crystallization_widget, "Avrami Fit", f"Crystallization Rate k: {k_val:.4e}, Exponent n: {n_val:.2f}")
                         else:
                             QMessageBox.warning(self.crystallization_widget, "Avrami Fit Error", "Insufficient valid frequency data for fitting (need at least 3 points)")
                     except Exception as e:
-                        QMessageBox.warning(self.crystallization_widget, "Avrami Fit Error", str(e))
+                             QMessageBox.warning(self.crystallization_widget, "Avrami Fit Error", str(e))
+
+                    self.crystallization_widget.show()
 
                 except Exception as e:
-                    QMessageBox.warning(self.crystallization_widget, "Plotting Error", str(e))
+                    QMessageBox.critical(self, "Processing Error", f"Unexpected error: {str(e)}")
 
-            self.crystallization_widget.show()
 
         except Exception as e:
             QMessageBox.warning(self, "Window Error", str(e))

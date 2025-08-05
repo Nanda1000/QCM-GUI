@@ -6,6 +6,7 @@ from scipy.optimize import least_squares
 from scipy.interpolate import UnivariateSpline
 import pyqtgraph as pg
 from VNA_Data.Acquire_data import acquire_data
+import warnings
 
 """Some of the key parameters to find the motional resistance(damping/viscosity effect)
 Resonance Frequency which can tell about mass loading effect and for the full modeling
@@ -60,22 +61,43 @@ def half_power_threshold(freqs, Z1, R):
           
     return half_power_freqs
 
-def parameter(freqs, impedance):
-    Z1 = np.abs(impedance)
 
-    # Use spline smoothing to robustly find resonance frequency
-    spline = UnivariateSpline(freqs, Z1, s=1)
-    fine_freqs = np.linspace(freqs[0], freqs[-1], 5000)
-    fine_Z1 = spline(fine_freqs)
+
+def parameter(freqs, impedance, Resistance=None):
+    freqs = np.array(freqs)
+    impedance = np.array(impedance)
+
+    # Handle insufficient data for spline (less than 4 points)
+    if len(freqs) < 4:
+        min_index = np.argmin(np.abs(impedance))
+        fs = freqs[min_index]
+        Rm = Resistance[min_index] if Resistance is not None else impedance[min_index].real
+        return Rm, None, None, None, fs
+
+    # Handle real vs complex impedance
+    if np.iscomplexobj(impedance):
+        Z1 = np.abs(impedance)
+    else:
+        warnings.warn("Only real impedance provided. Cannot extract full electrical parameters.")
+        Z1 = impedance
+
+    # Spline smoothing to find resonance frequency fs
+    try:
+        spline = UnivariateSpline(freqs, Z1, s=1)
+        fine_freqs = np.linspace(freqs[0], freqs[-1], 5000)
+        fine_Z1 = spline(fine_freqs)
+    except Exception as e:
+        raise RuntimeError(f"Spline fitting failed: {e}")
+
     min_index = np.argmin(fine_Z1)
     fs = fine_freqs[min_index]
 
-    # Find nearest actual data index to fs
+    # Find nearest real value for fs and Rm
     nearest_index = np.argmin(np.abs(freqs - fs))
     Zfs = impedance[nearest_index]
     Rm = Zfs.real
 
-    # Half-power bandwidth
+    # Half-power bandwidth for Q calculation
     R = Rm * np.sqrt(2)
     half_power_freqs = half_power_threshold(freqs, Z1, R)
     if len(half_power_freqs) >= 2:
@@ -84,20 +106,23 @@ def parameter(freqs, impedance):
     else:
         Q = 8000  # fallback
 
-    Lm = Rm * Q / (2 * np.pi * fs)
-    Cm = 1 / (Lm * (2 * np.pi * fs) ** 2)
+    # Compute Lm and Cm
+    Lm = Rm * Q / (2 * np.pi * fs) if fs > 0 else 1e-6
+    Cm = 1 / (Lm * (2 * np.pi * fs) ** 2) if Lm > 0 and fs > 0 else 1e-12
 
-    # Estimate C0 from multiple high-frequency points
-    high_freqs = freqs[-10:]
-    high_ImZ = np.imag(impedance[-10:])
-    if np.all(high_ImZ != 0):
-        C0_vals = -1 / (2 * np.pi * high_freqs * high_ImZ)
-        C0 = np.mean(C0_vals)
-    else:
-        C0 = 1e-12  # default fallback
+    # Estimate static capacitance C0
+    try:
+        high_freqs = freqs[-10:]
+        high_ImZ = np.imag(impedance[-10:])
+        if np.all(high_ImZ != 0):
+            C0_vals = -1 / (2 * np.pi * high_freqs * high_ImZ)
+            C0 = np.mean(C0_vals)
+        else:
+            C0 = 1e-12
+    except Exception:
+        C0 = 1e-12
 
     return Rm, Lm, Cm, C0, fs
-
 
 # Residuals for fitting model
 def fit_data(parameters, fs, Z_measured):
@@ -115,10 +140,14 @@ if __name__ == "__main__":
         raise Exception("No serial ports found.")
 
     device_path = ports[0].device
-    freqs, _, impedance, _, _, _ = acquire_data(device_path)
+    freqs, Resistance, impedance, _, _, _ = acquire_data(device_path)
 
-    Rm, Lm, Cm, C0, fs = parameter(freqs, impedance)
-    initial_guess = [Rm, Lm, Cm, C0]
+    Rm, Lm, Cm, C0, fs = parameter(freqs, impedance, Resistance)
+    if None in (Rm, Lm, Cm, C0):
+     raise ValueError("Parameter extraction failed. Cannot fit data.")
+    else:
+     initial_guess = [Rm, Lm, Cm, C0]
+     
     result = least_squares(fit_data, initial_guess, args=(freqs, impedance))
 
     if not result.success:

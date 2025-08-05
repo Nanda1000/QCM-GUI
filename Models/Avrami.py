@@ -46,6 +46,8 @@ def validate_data(t, f_array):
     
     return t_clean, f_clean
 
+
+
 def fit(t, f_array):
     """
     Fit Avrami model to frequency data.
@@ -59,6 +61,7 @@ def fit(t, f_array):
     """
     # Validate and clean data
     t_clean, f_clean = validate_data(t, f_array)
+    
     
     # Get initial and final frequencies
     f0 = f_clean[0]
