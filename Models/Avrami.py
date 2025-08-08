@@ -6,10 +6,10 @@ def formula(k, n, t):
 
 def compute_X_t(f_array, f0, finf):
     f_array = np.array(f_array, dtype=float)
-    numerator = f0 - f_array
     denominator = f0 - finf
     if denominator == 0:
         raise ValueError("Initial and final frequencies must not be equal.")
+    numerator = f_array - f0
     X_t = numerator / denominator
     X_t = np.clip(X_t, 0, 1)
     return X_t

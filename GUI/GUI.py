@@ -94,9 +94,10 @@ class MainWindow(QMainWindow):
 
         view_menu.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
 
-        self.crystallization_action = QAction("Crystallization Dynamics & Kinetics", self)
+        submenu = view_menu.addMenu("Crystallization Dynamics & Kinetics", self)
+        self.crystallization_dynamics = submenu.addAction("Crystallization Dynamics")
+        self.crystallization_kinetics = submenu.addAction("Crystallization Kinetics")
         self.sauerbrey_action = QAction("Sauerbrey & Konazawa", self)
-        view_menu.addAction(self.crystallization_action)
         view_menu.addAction(self.sauerbrey_action)
 
 
@@ -246,7 +247,8 @@ class MainWindow(QMainWindow):
         self.start_logging.clicked.connect(self.start_logging_button)
         self.stop_logging.clicked.connect(self.stop_logging_button)
         self.update_button.clicked.connect(self.update_buttons)
-        self.crystallization_action.triggered.connect(self.crystallizationdynamicskinetics)
+        self.crystallization_dynamics.triggered.connect(self.crystallizationdynamics)
+        self.crystallization_kinetics.triggered.connect(self.crystallizationkinetics)
         self.sauerbrey_action.triggered.connect(self.sauerbrey_konazawa)
 
         self.rescan_button_clicked()
@@ -277,12 +279,20 @@ class MainWindow(QMainWindow):
 
 
 
+def sweep(self):
+    try:
+        freqs, R, Z, X, phase, t = acquire_data(self.vna, 1e6, 10e6, 201)
+        # Use the data: update plots, table, etc.
+        self.plot_impedance(freqs, R, X)
+        self.append_to_table(freqs, R, X, phase)
+    except Exception as e:
+        QMessageBox.warning(self, "Sweep Error", str(e))
+
 
     def start_logging_button(self):
         try:
-            if self.sweep_points.text():
-                QMessageBox.warning(self, "Missing Reference", "Please enter the sweep points before starting logging.")
-                return
+            self.timer = QTimer()
+            self.timer.timeout.connect(self.run_single_sweep)
             self.timer.start(2000)
             self.start_logging.setEnabled(False)
             self.stop_logging.setEnabled(True)
@@ -291,7 +301,9 @@ class MainWindow(QMainWindow):
 
     def stop_logging_button(self):
         try:
-            self.timer.stop()
+            if hasattr(self, 'timer') and self.timer.isActive():
+                self.timer.stop()
+                self.statusBar().showMessage("Logging stopped.")
             self.start_logging.setEnabled(True)
             self.stop_logging.setEnabled(False)
         except Exception as e:
@@ -375,9 +387,13 @@ class MainWindow(QMainWindow):
         selected = self.combo.currentText()
         resource = self.resource_map.get(selected, selected)
         try:
-            instr = self.rm.open_resource(resource)
-            idn = instr.query("*IDN?")
-            QMessageBox.information(self, "Connected", f"Instrument ID: {idn}")
+            try:
+                self.vna = NanoVNA()
+                self.vna.connect()
+                self.statusBar().showMessage("Connected to NanoVNA.")
+            except Exception as e:
+                QMessageBox.critical(self, "Connection Error", str(e))
+                    
 
             start = float(self.start_frequency.text() or 1e6)
             stop = float(self.end_frequency.text() or 10e6)
@@ -491,7 +507,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "File Error", str(e))
 
-    def crystallizationdynamicskinetics(self):
+    def crystallizationdynamics(self):
         try:
             # Create a new window for crystallization dynamics & kinetics
             self.crystallization_widget = QWidget()
@@ -527,9 +543,6 @@ class MainWindow(QMainWindow):
             self.plot_frequency.setLabel("bottom", "Time (s)")
             plot_layout.addWidget(self.plot_frequency)
 
-            self.plot_crystallization_fraction = pg.PlotWidget()
-            self.plot_crystallization_fraction.setTitle("Crystallization Fraction X(t) vs Time")
-            plot_layout.addWidget(self.plot_crystallization_fraction)
 
             # Section: Parameter Inputs
             #BVD
@@ -679,12 +692,80 @@ class MainWindow(QMainWindow):
                             QMessageBox.warning(self.crystallization_widget, "BVD Fit Error", str(e))
 
                     # Avrami fitting
+                    
+                except Exception as e:
+                     QMessageBox.warning(self, "Window Error", str(e))
+        except Exception as e:
+            QMessageBox.warning(self, "Window Error", str(e))
+            
+    def crystallizationkinetics(self):
+        
+            self.crystallization_widget = QWidget()
+            self.crystallization_widget.setWindowTitle("Crystallization Dynamics & Kinetics")
+            self.crystallization_widget.resize(1400, 1200)
+            main_layout = QVBoxLayout(self.crystallization_widget)
+            main_splitter = QSplitter(Qt.Orientation.Horizontal)
+            
+
+              # Left panel (controls)
+            left_widget = QWidget()
+            left_layout = QVBoxLayout(left_widget)
+            left_layout.setContentsMargins(0, 0, 0, 0)
+            left_layout.setSpacing(5)
+            
+            right_splitter = QSplitter(Qt.Orientation.Vertical)
+            right_widget = QWidget()
+            right_layout = QVBoxLayout(right_widget)
+            right_layout.setSpacing(10)
+        
+            plot_layout = QVBoxLayout()
+            
+            self.plot_crystallization_fraction = pg.PlotWidget()
+            self.plot_crystallization_fraction.setTitle("Crystallization Fraction X(t) vs Time")
+            plot_layout.addWidget(self.plot_crystallization_fraction)
+            
+            group_box1 = QGroupBox("Avrami Model")
+
+            param_form2 = QFormLayout()
+            self.f0_edit = QLineEdit()
+            self.finf_edit = QLineEdit()
+            self.t_edit = QLineEdit()
+            self.k_edit = QLineEdit()
+            self.n_edit = QLineEdit()
+            param_form2.addRow("Initial Frequency (f₀):", self.f0_edit)
+            param_form2.addRow("Final Frequency (f_inf):", self.finf_edit)
+            param_form2.addRow("Time (t):", self.t_edit)
+            param_form2.addRow("Crystallization Rate (k):", self.k_edit)
+            param_form2.addRow("Avrami Exponent (n):", self.n_edit)
+            self.fit_btn1 = QPushButton("Fit Avrami")
+            param_form2.addRow(self.fit_btn1)
+
+
+            group_box1.setLayout(param_form2)
+            right_splitter.addWidget(group_box1)
+            
+            self.fit_btn1.clicked.connect(self.fit_data1)
+            self.fit_btn1.setEnabled(True)
+
+            # Add to main layout
+            left_layout.addLayout(plot_layout)
+            left_widget.setLayout(left_layout)
+            main_splitter.addWidget(left_widget)
+            main_splitter.addWidget(right_splitter)
+            main_layout.addWidget(main_splitter)
+            
+            if not self.data.empty:
+            
                     try:
                         points = int(self.sweep_points.text() or "201")
                         total_rows = len(self.data)
                         num_sweeps = total_rows // points
+                        
+                        
+                        
 
                         k_values = []
+                        fs_values = []
                         n_values = []
                         sweep_indices = []
 
@@ -704,7 +785,8 @@ class MainWindow(QMainWindow):
                                 print(f"Sweep {i} skipped: {e}")
 
                         F = np.array(fs_values)
-                        t_seconds = np.array(t_seconds)
+                        t_seconds = np.array([i for i in range(len(F))])  # or use your actual timestamps
+
                         mask_f_valid = np.isfinite(F) & np.isfinite(t_seconds)
 
                         if mask_f_valid.sum() >= 3:
@@ -722,8 +804,8 @@ class MainWindow(QMainWindow):
                                 self.plot_crystallization_fraction.clear()
                                 self.plot_crystallization_fraction.plot(t_seconds, X_t, pen='m', name='Fitted')
                                 self.plot_crystallization_fraction.plot(t_seconds, X_actual, pen='b', symbol='o', symbolBrush='b', name='Actual')
-                                self.plot_crystallization_fraction.plot(t_sweep, k_values, pen='r', symbol='o', symbolBrush='b', name='kinetic vs time')
-                                self.plot_crystallization_fraction.plot(t_sweep, n_values, pen='g', symbol='o', symbolBrush='b', name='Growth-Rate vs time')
+                                self.plot_crystallization_fraction.plot(sweep_indices, k_values, pen='r', symbol='o', symbolBrush='b', name='kinetic vs time')
+                                self.plot_crystallization_fraction.plot(sweep_indices, n_values, pen='g', symbol='o', symbolBrush='b', name='Growth-Rate vs time')
 
                                 QMessageBox.information(self.crystallization_widget, "Avrami Fit", f"Crystallization Rate k: {k_val:.4e}, Exponent n: {n_val:.2f}")
                             except ValueError as e:
@@ -733,10 +815,8 @@ class MainWindow(QMainWindow):
                     except Exception as e:
                         QMessageBox.critical(self.crystallization_widget, "Unexpected Error", str(e))
 
-                except Exception as e:
-                     QMessageBox.warning(self, "Window Error", str(e))
-        except Exception as e:
-            QMessageBox.warning(self, "Window Error", str(e))
+
+        
             
     
     def _validate_avrami_data(self, timestamps, freqs):
