@@ -16,5 +16,4 @@ def parameter(freqs, impedance):
 def konazawa(f0, p, u, ft, p1):
     f = f0 -ft
     n = (f*(np.sqrt((np.pi * u * p)/(p1 * f0**3))))**2
-    
     return n

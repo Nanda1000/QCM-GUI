@@ -52,7 +52,7 @@ def butterworth(fs, Rm, Lm, Cm, C0):
 def half_power_threshold(freqs, Z1, R):
     half_power_freqs = []
     for i in range(1, len(Z1)):
-       if(Z1[i-1]-R) * (Z1[i] -R) < 0:
+       if(Z1[i-1]-R) * (Z1[i] -R) <= 0:
           f1, f2 = freqs[i-1], freqs[i]
           z1, z2 = Z1[i-1], Z1[i]
           slope = (z2 -z1)/(f2-f1)

@@ -1,965 +1,946 @@
+
 import sys
 import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import threading
+import time
+from datetime import datetime
+from functools import partial
+from typing import Optional
+from VNA_Data.Acquire_data import NanoVNA
+
+
+
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtGui
 import numpy as np
 import pandas as pd
-from scipy.optimize import least_squares
-import pyvisa
-from VNA_Data.Acquire_data import acquire_data
-from Models.Butterworth import half_power_threshold, parameter, fit_data, butterworth
-from Models.Avrami import compute_X_t, fit, formula, validate_data
-from Models.Sauerbrey import parameter as sauerbrey_parameter, sauerbrey
-from Models.konazawa import parameter as konazawa_parameter, konazawa
-from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel
-from PyQt6.QtGui import QAction
+
+from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex
+from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (
     QFileDialog, QGroupBox, QSplitter, QWidget, QTableView, QLineEdit, QToolBar,
     QHBoxLayout, QMessageBox, QPushButton, QLabel, QVBoxLayout, QMainWindow,
-    QApplication, QStatusBar, QFormLayout, QComboBox
+    QApplication, QStatusBar, QFormLayout, QComboBox, QSizePolicy, QFrame
 )
+from Models.Butterworth import parameter as bvd_parameter, butterworth
+from Models.Avrami import compute_X_t, fit as avrami_fit, formula as avrami_formula
+from Models.Sauerbrey import sauerbrey
+from Models.konazawa import konazawa
 
+
+
+# ---------------------------
+# Table model ()
+# ---------------------------
 class TableModel(QAbstractTableModel):
-    def __init__(self, data):
+    def __init__(self, df: pd.DataFrame):
         super().__init__()
-        self._data = data
+        self._data = df.reset_index(drop=True)
 
-    def data(self, index, role):
+    def rowCount(self, parent=QModelIndex()):
+        return int(self._data.shape[0])
+
+    def columnCount(self, parent=QModelIndex()):
+        return int(self._data.shape[1])
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
         if role == Qt.ItemDataRole.DisplayRole:
-            value = self._data.iloc[index.row(), index.column()]
+            value = self._data.iat[index.row(), index.column()]
+            if pd.isna(value):
+                return ""
             return str(value)
         return None
 
-    def rowCount(self, index):
-        return self._data.shape[0]
-
-    def columnCount(self, index):
-        return self._data.shape[1]
-
-    def headerData(self, section, orientation, role):
-        if role == Qt.ItemDataRole.DisplayRole:
-            if orientation == Qt.Orientation.Horizontal:
-                return str(self._data.columns[section])
-            if orientation == Qt.Orientation.Vertical:
-                return str(section)
-        return None
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role != Qt.ItemDataRole.DisplayRole:
+            return None
+        if orientation == Qt.Orientation.Horizontal:
+            return str(self._data.columns[section])
+        return str(section)
 
     def flags(self, index):
-        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
 
-    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
-        if role == Qt.ItemDataRole.EditRole:
-            self._data.iloc[index.row(), index.column()] = value
-            self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole])
-            return True
-        return False
+    def set_dataframe(self, df: pd.DataFrame):
+        self.beginResetModel()
+        self._data = df.reset_index(drop=True)
+        self.endResetModel()
 
+    def dataframe(self):
+        return self._data
+
+
+# ---------------------------
+# Main application window
+# ---------------------------
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("GUI for Network Analyzer")
+        self.setWindowTitle("NanoVNA Data Logger & Analysis")
         self.resize(1400, 900)
         self.setMinimumSize(1000, 700)
 
-        # Toolbar
-        toolbar = QToolBar("Main toolbar")
+        # state / models
+        self.vna: Optional[NanoVNA] = None
+        self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Phase"])
+        self.table_model = TableModel(self.data)
+        self.impedance = None
+        self.freqs = np.linspace(1e6, 10e6, 201)
+        self.is_dark = False
+
+        # GUI build
+        self._build_actions()
+        self._build_toolbar()
+        self._build_statusbar()
+        self._build_main_layout()
+
+        # QTimer for fallback polling (not active by default)
+        self.poll_timer = QTimer(self)
+        self.poll_timer.setInterval(2000)
+        self.poll_timer.timeout.connect(self.run_single_sweep)
+
+        # minimal attempt to import pyvisa resources; non-fatal
+        try:
+            import pyvisa
+            self.pyvisa_rm = pyvisa.ResourceManager()
+        except Exception:
+            self.pyvisa_rm = None
+
+        # initial populate of device list
+        QTimer.singleShot(50, self.rescan_ports)
+
+    # ---------------------------
+    # UI: actions & toolbar
+    # ---------------------------
+    def _build_actions(self):
+        self.act_connect = QAction("Connect", self)
+        self.act_connect.triggered.connect(self.connect_to_instrument)
+        self.act_rescan = QAction("Rescan", self)
+        self.act_rescan.triggered.connect(self.rescan_ports)
+        self.act_start = QAction("Start Logging", self)
+        self.act_start.triggered.connect(self.start_logging_button)
+        self.act_stop = QAction("Stop Logging", self)
+        self.act_stop.triggered.connect(self.stop_logging_button)
+        self.act_export = QAction("Export CSV", self)
+        self.act_export.triggered.connect(self.export_csv)
+        self.act_toggle_theme = QAction("Toggle Dark Mode", self)
+        self.act_toggle_theme.triggered.connect(self.toggle_theme)
+
+    def _build_toolbar(self):
+        toolbar = QToolBar("Main")
         toolbar.setIconSize(QSize(16, 16))
+        toolbar.addAction(self.act_connect)
+        toolbar.addAction(self.act_rescan)
+        toolbar.addSeparator()
+        toolbar.addAction(self.act_start)
+        toolbar.addAction(self.act_stop)
+        toolbar.addSeparator()
+        toolbar.addAction(self.act_export)
+        toolbar.addSeparator()
+        toolbar.addAction(self.act_toggle_theme)
         self.addToolBar(toolbar)
 
-        # Menu
-        menu = self.menuBar()
-        file_menu = menu.addMenu("&File")
-        file_menu.addAction(QAction("New File", self))
-        file_menu.addSeparator()
-        file_menu.addAction(QAction("Open File", self))
-        file_menu.addSeparator()
-        file_menu.addAction(QAction("Save", self))
-        file_menu.addSeparator()
-        file_menu.addAction(QAction("Save As", self))
-        file_menu.addSeparator()
-        file_menu.addAction(QAction("Share as", self))
-        file_menu.addSeparator()
-        file_menu.addAction(QAction("Print", self))
-        file_menu.addSeparator()
-        file_menu.addAction(QAction("Close", self))
-        file_menu.addMenu("Share")
-        edit_menu = menu.addMenu("&Edit")
-        view_menu = menu.addMenu("&View")
-        self.button_action8 = QAction("Add Table", self)
-        view_menu.addAction(self.button_action8)
-        
+    def _build_statusbar(self):
+        sb = QStatusBar(self)
+        self.setStatusBar(sb)
+        self.statusBar().showMessage("Ready")
 
-        self.setStatusBar(QStatusBar(self))
-
-        view_menu.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-
-        submenu = view_menu.addMenu("Crystallization Dynamics & Kinetics", self)
-        self.crystallization_dynamics = submenu.addAction("Crystallization Dynamics")
-        self.crystallization_kinetics = submenu.addAction("Crystallization Kinetics")
-        self.sauerbrey_action = QAction("Sauerbrey & Konazawa", self)
-        view_menu.addAction(self.sauerbrey_action)
-
-
+    # ---------------------------
+    # Main layout (left controls, right plot/table)
+    # ---------------------------
+    def _build_main_layout(self):
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.setCentralWidget(main_splitter)
 
-        # Left panel (controls)
+        # --- LEFT: controls ---
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
-        left_layout.setSpacing(10)
+        left_layout.setSpacing(12)
+        left_layout.setContentsMargins(8, 8, 8, 8)
 
         # Metadata group
-        group_box = QGroupBox("Metadata")
-        layout = QFormLayout()
+        meta_grp = QGroupBox("Metadata")
+        meta_layout = QFormLayout()
         self.sample_name = QLineEdit()
         self.batch_number = QLineEdit()
-        self.coating_solution = QLineEdit()
-        self.notes = QLineEdit()
         self.operator_name = QLineEdit()
-        layout.addRow("Sample Name:", self.sample_name)
-        layout.addRow("Batch Number:", self.batch_number)
-        layout.addRow("Coating solution:", self.coating_solution)
-        layout.addRow("Notes:", self.notes)
-        layout.addRow("Operator Name:", self.operator_name)
-        group_box.setLayout(layout)
-        left_layout.addWidget(group_box)
+        self.notes = QLineEdit()
+        meta_layout.addRow("Sample:", self.sample_name)
+        meta_layout.addRow("Batch No.:", self.batch_number)
+        meta_layout.addRow("Operator:", self.operator_name)
+        meta_layout.addRow("Notes:", self.notes)
+        meta_grp.setLayout(meta_layout)
+        left_layout.addWidget(meta_grp)
 
-        # Sweep Frequency Range
-        group_box2 = QGroupBox("Sweep Frequency Range")
-        range_layout = QHBoxLayout()
-        self.label2 = QLabel("Start")
-        self.start_frequency = QLineEdit()
-        self.label3 = QLabel("End")
-        self.end_frequency = QLineEdit()
-        self.label_points = QLabel("Points")
-        self.sweep_points = QLineEdit()
-        self.sweep_points.setPlaceholderText("e.g., 201")
-        self.update_button = QPushButton("Update")
-        range_layout.addWidget(self.label_points)
-        range_layout.addWidget(self.sweep_points)
-        range_layout.addWidget(self.label2)
-        range_layout.addWidget(self.start_frequency)
-        range_layout.addWidget(self.label3)
-        range_layout.addWidget(self.end_frequency)
-        range_layout.addWidget(self.update_button)
-        group_box2.setLayout(range_layout)
-        left_layout.addWidget(group_box2)
+        # Acquisition group
+        acq_grp = QGroupBox("Data Acquisition")
+        acq_layout = QVBoxLayout()
+        h_rescan = QHBoxLayout()
+        self.combo_ports = QComboBox()
+        self.combo_ports.setEditable(True)
+        self.combo_ports.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        h_rescan.addWidget(QLabel("Instrument:"))
+        h_rescan.addWidget(self.combo_ports)
+        btn_rescan = QPushButton("Rescan")
+        btn_rescan.clicked.connect(self.rescan_ports)
+        h_rescan.addWidget(btn_rescan)
+        acq_layout.addLayout(h_rescan)
 
-        # Controls
-        group_box4 = QGroupBox("Controls")
-        table_button = QHBoxLayout()
-        self.start_logging = QPushButton("Start Logging")
-        self.stop_logging = QPushButton("Stop Logging")
-        self.upload_button = QPushButton("Upload Data")
-        table_button.addWidget(self.upload_button)
-        table_button.addWidget(self.start_logging)
-        table_button.addWidget(self.stop_logging)
-        self.start_logging.setEnabled(True)
-        self.stop_logging.setEnabled(False)
-        group_box4.setLayout(table_button)
-        left_layout.addWidget(group_box4)
+        freq_form = QFormLayout()
+        self.start_frequency = QLineEdit("1000000")
+        self.end_frequency = QLineEdit("10000000")
+        self.sweep_points = QLineEdit("201")
+        freq_form.addRow("Start (Hz):", self.start_frequency)
+        freq_form.addRow("Stop (Hz):", self.end_frequency)
+        freq_form.addRow("Points:", self.sweep_points)
+        acq_layout.addLayout(freq_form)
+
+        btns = QHBoxLayout()
+        self.btn_connect = QPushButton("Connect")
+        self.btn_connect.clicked.connect(self.connect_to_instrument)
+        self.btn_single = QPushButton("Single Sweep")
+        self.btn_single.clicked.connect(self.run_single_sweep)
+        btns.addWidget(self.btn_connect)
+        btns.addWidget(self.btn_single)
+        acq_layout.addLayout(btns)
+
+        acq_grp.setLayout(acq_layout)
+        left_layout.addWidget(acq_grp)
+
+        # Logging controls
+        control_grp = QGroupBox("Logging Controls")
+        ctl_layout = QHBoxLayout()
+        self.btn_start = QPushButton("Start Logging")
+        self.btn_stop = QPushButton("Stop Logging")
+        self.btn_stop.setEnabled(False)
+        self.btn_start.clicked.connect(self.start_logging_button)
+        self.btn_stop.clicked.connect(self.stop_logging_button)
+        ctl_layout.addWidget(self.btn_start)
+        ctl_layout.addWidget(self.btn_stop)
+        control_grp.setLayout(ctl_layout)
+        left_layout.addWidget(control_grp)
+
+        # Analysis shortcuts
+        analysis_grp = QGroupBox("Analysis Tools")
+        an_layout = QVBoxLayout()
+        self.btn_sauer = QPushButton("Sauerbrey / Konazawa")
+        self.btn_sauer.clicked.connect(self.sauerbrey_konazawa)
+        self.btn_cryst_dyn = QPushButton("Crystallization Dynamics")
+        self.btn_cryst_dyn.clicked.connect(self.crystallizationdynamics)
+        self.btn_cryst_kin = QPushButton("Crystallization Kinetics")
+        self.btn_cryst_kin.clicked.connect(self.crystallizationkinetics)
+        an_layout.addWidget(self.btn_sauer)
+        an_layout.addWidget(self.btn_cryst_dyn)
+        an_layout.addWidget(self.btn_cryst_kin)
+        analysis_grp.setLayout(an_layout)
+        left_layout.addWidget(analysis_grp)
+
         left_layout.addStretch()
+        main_splitter.addWidget(left_widget)
+        left_widget.setMinimumWidth(320)
 
-
-        # Data Acquisition group
-        group_box1 = QGroupBox("Data Acquisition")
-        layout1 = QVBoxLayout()
-        self.label = QLabel("Select the Instrument")
-        layout1.addWidget(self.label)
-        self.combo = QComboBox()
-        self.combo.setEditable(True)
-        layout1.addWidget(self.combo)
-        button_layout = QHBoxLayout()
-        self.connect_button = QPushButton("Connect")
-        self.rescan_button = QPushButton("Rescan")
-        button_layout.addWidget(self.connect_button)
-        button_layout.addWidget(self.rescan_button)
-        layout1.addLayout(button_layout)
-        group_box1.setLayout(layout1)
-        left_layout.addWidget(group_box1)
-
-        # Right panel (table and plot)
+        # --- RIGHT: table + plot (vertical) ---
         right_splitter = QSplitter(Qt.Orientation.Vertical)
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(5)
-
-        # Sauerbrey and Konazawa data
-        self.label1_sauer = QLabel("Resonant Frequency(f0)")
-        self.resonant = QLineEdit()
-        self.label4_sauer = QLabel("Density of Quartz(ρ)")
-        self.density = QLineEdit()
-        self.label5_sauer = QLabel("Shear Modulus(µ)")
-        self.shear = QLineEdit()
-        self.label6_sauer = QLabel("Active Area of Electrode(A)")
-        self.area = QLineEdit()
 
         # Table
-        self.data = pd.DataFrame(columns=["Time", "Frequency(Hz)", "Resistance(Ω)", "Phase"])
-        self.model = TableModel(self.data)
-        self.model.dataChanged.connect(self.update_plot)
-        self.table = QTableView()
-        self.table.setModel(self.model)
+        table_frame = QFrame()
+        table_layout = QVBoxLayout(table_frame)
+        table_layout.setContentsMargins(4, 4, 4, 4)
+        self.table_view = QTableView()
+        self.table_view.setModel(self.table_model)
+        self.table_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        table_layout.addWidget(QLabel("Data Table"))
+        table_layout.addWidget(self.table_view)
+        right_splitter.addWidget(table_frame)
 
-        right_splitter.addWidget(self.table)
-
-        self.freqs = np.linspace(1e6, 10e6, 201)
-        self.resistance = np.zeros_like(self.freqs)
-        self.phase = np.zeros_like(self.freqs)
-        self.time_array = np.linspace(0, 10, len(self.freqs))
-        self.fs = []
-        self.rm = []
-
-
-        # Avrami calculation
-        self.f0 = self.freqs[0] if len(self.freqs) > 0 else 0
-        self.finf = self.freqs[-1] if len(self.freqs) > 0 else 0
-        try:
-         self.X = compute_X_t(self.freqs, self.f0, self.finf)
-        except Exception as e:
-         self.X = np.zeros_like(self.freqs)  # fallback if compute_X_t fails
-         print("Avrami X(t) calculation error:", e)
-
-        # Plot the data
+        # Plot
+        plot_frame = QFrame()
+        plot_layout = QVBoxLayout(plot_frame)
+        plot_layout.setContentsMargins(4, 4, 4, 4)
+        plot_layout.addWidget(QLabel("Resistance vs Frequency"))
         self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setTitle("Resistance vs Frequency")
-        self.plot_widget.setLabel("left", "Resistance (Ω)")
-        self.plot_widget.setLabel("bottom", "Frequency(Hz)")
-        self.plot_widget.plot(self.freqs, self.resistance, pen='b')
-        right_splitter.addWidget(self.plot_widget)
+        self.plot_widget.setBackground('w')
+        self.plot_curve = self.plot_widget.plot(self.freqs, np.zeros_like(self.freqs), pen='b')
+        self.plot_widget.setLabel('left', 'Resistance (Ω)')
+        self.plot_widget.setLabel('bottom', 'Frequency (Hz)')
+        self.plot_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        plot_layout.addWidget(self.plot_widget)
+        right_splitter.addWidget(plot_frame)
 
-        main_splitter.addWidget(left_widget)
         main_splitter.addWidget(right_splitter)
-        main_splitter.setSizes([400, 1000])
+        main_splitter.setStretchFactor(0, 0)
+        main_splitter.setStretchFactor(1, 1)
 
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.continuous_logging)
+    # ---------------------------
+    # Utilities: safe notifications
+    # ---------------------------
+    def _notify(self, level: str, title: str, message: str):
+        """Schedule a messagebox or statusbar text on main thread."""
+        def _show():
+            if level == "info":
+                # short info: status + optional messagebox for explicit info
+                self.statusBar().showMessage(f"{title}: {message}", 8000)
+            elif level == "warning":
+                QMessageBox.warning(self, title, message)
+            elif level == "critical":
+                QMessageBox.critical(self, title, message)
+            else:
+                QMessageBox.information(self, title, message)
+        QTimer.singleShot(0, _show)
 
-        self.rm = pyvisa.ResourceManager()
-        self.resource_map = {}
+    # This callback is passed to NanoVNA to receive messages from worker threads
+    def notify_callback(self, level, title, message):
+        # ensure scheduled on GUI thread
+        self._notify(level, title, message)
 
-        self.connect_button.clicked.connect(self.connect_to_instrument)
-        self.rescan_button.clicked.connect(self.rescan_button_clicked)
-        self.button_action8.triggered.connect(self.insert_button_clicked)
-        self.upload_button.clicked.connect(self.upload_button_clicked)
-        self.start_logging.clicked.connect(self.start_logging_button)
-        self.stop_logging.clicked.connect(self.stop_logging_button)
-        self.update_button.clicked.connect(self.update_buttons)
-        self.crystallization_dynamics.triggered.connect(self.crystallizationdynamics)
-        self.crystallization_kinetics.triggered.connect(self.crystallizationkinetics)
-        self.sauerbrey_action.triggered.connect(self.sauerbrey_konazawa)
-
-        self.rescan_button_clicked()
-
-    def update_buttons(self):
-        start = self.start_frequency.text()
-        end = self.end_frequency.text()
-        if not start or not end:
-            QMessageBox.warning(self, "Input Error", "Please enter both start and end frequencies.")
-            return
-        try:
-            start_val = float(start)
-            end_val = float(end)
-            if start_val >= end_val:
-                QMessageBox.warning(self, "Input Error", "Start frequency must be less than end frequency.")
-                return
-            QMessageBox.information(self, "Sweep Range Updated", f"Sweep range set: {start_val} Hz to {end_val} Hz.")
-        except ValueError:
-            QMessageBox.warning(self, "Input Error", "Please enter valid numeric values for frequencies.")
-        try:
-            points_val = int(self.sweep_points.text())
-            if points_val < 10 or points_val > 2001:
-                QMessageBox.warning(self, "Input Error", "Sweep points should be between 10 and 2001.")
-                return
-        except ValueError:
-                QMessageBox.warning(self, "Input Error", "Please enter a valid integer for sweep points.")
-                return
-
-
-
-def sweep(self):
-    try:
-        freqs, R, Z, X, phase, t = acquire_data(self.vna, 1e6, 10e6, 201)
-        # Use the data: update plots, table, etc.
-        self.plot_impedance(freqs, R, X)
-        self.append_to_table(freqs, R, X, phase)
-    except Exception as e:
-        QMessageBox.warning(self, "Sweep Error", str(e))
-
-
-    def start_logging_button(self):
-        try:
-            self.timer = QTimer()
-            self.timer.timeout.connect(self.run_single_sweep)
-            self.timer.start(2000)
-            self.start_logging.setEnabled(False)
-            self.stop_logging.setEnabled(True)
-        except Exception as e:
-            QMessageBox.warning(self, "Error in continuous logging", str(e))
-
-    def stop_logging_button(self):
-        try:
-            if hasattr(self, 'timer') and self.timer.isActive():
-                self.timer.stop()
-                self.statusBar().showMessage("Logging stopped.")
-            self.start_logging.setEnabled(True)
-            self.stop_logging.setEnabled(False)
-        except Exception as e:
-            QMessageBox.warning(self, "Error in stop_logging", str(e))
-
-    def update_plot(self):
-        self.plot_widget.clear()
-        if not self.data.empty and "Frequency(Hz)" in self.data.columns and "Resistance(Ω)" in self.data.columns:
+    # ---------------------------
+    # Device scanning & connect
+    # ---------------------------
+    def rescan_ports(self):
+        """Populate device combobox. Adds 'NanoVNA (Auto-detect)' entry."""
+        self.combo_ports.clear()
+        self.combo_ports.addItem("NanoVNA (Auto-detect)")
+        # try pyvisa devices if available (best-effort)
+        if self.pyvisa_rm:
             try:
-                x = pd.to_numeric(self.data["Frequency(Hz)"], errors='coerce')
-                y = pd.to_numeric(self.data["Resistance(Ω)"], errors='coerce')
-                mask = x.notnull() & y.notnull()
-                self.plot_widget.plot(x[mask], y[mask], pen='r', symbol='o', symbolSize=5, symbolBrush='b')
+                res = self.pyvisa_rm.list_resources()
+                for r in res:
+                    self.combo_ports.addItem(str(r))
             except Exception:
+                # ignore errors from pyvisa
                 pass
+        self.statusBar().showMessage("Device list updated", 3000)
 
-    def continuous_logging(self):
+    def _connect_worker(self, port_hint: Optional[str] = None):
+        """Background connect worker — uses NanoVNA.connect and does one quick scan."""
         try:
-            timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
-            t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
-            start = float(self.start_frequency.text() or 1e6)
-            stop = float(self.end_frequency.text() or 10e6)
-            points = int(self.sweep_points.text() or "201")
-            freqs, resistances, impedance, _, _, _ = acquire_data(self.combo.currentText(), start, stop, points)
-            self.impedance = np.array(impedance)
-            Rm, Lm, Cm, C0, fs = parameter(freqs, self.impedance)
-            initial_guess = [Rm, Lm, Cm, C0]
-            result = least_squares(
-            lambda params: np.concatenate([
-                np.real(butterworth(freqs, *params) - self.impedance),
-                np.imag(butterworth(freqs, *params) - self.impedance)
-           ]),
-            initial_guess
-         )
-            self.Z_fit = butterworth(freqs, *result.x)
-            self.fit_btn.setEnabled(True)
+            # create NanoVNA instance if not present
+            if self.vna is None:
+                self.vna = NanoVNA(port=port_hint, notify_callback=self.notify_callback)
 
-            abs_freq = float(self.abs_frequency.text())
-            abs_res = float(self.abs_resistance.text())
-
-            rows = [{
-                "Time": t_seconds,
-                "Frequency(Hz)": f,
-                "Resistance(Ω)": r,
-                "Phase": 0
-            } for f, r in zip(freqs, resistances)]
-            
-            self.rm.append(Rm)
-            self.fs.append(fs)
-
-            self.data = pd.concat([self.data, pd.DataFrame(rows)], ignore_index=True)
-            self.model = TableModel(self.data)
-            self.model.dataChanged.connect(self.update_plot)
-            self.table.setModel(self.model)
-
-            self.update_plot()
-        except Exception as e:
-            QMessageBox.warning(self, "Error in logging", str(e))
-
-    def rescan_button_clicked(self):
-        self.combo.clear()
-        self.resource_map = {}
-        try:
-            self.resources = self.rm.list_resources()
-            if not self.resources:
-                QMessageBox.critical(self, "No Instruments", "No instrument found.")
+            ok = self.vna.connect()
+            if not ok:
+                self._notify("critical", "Connect", "Failed to connect to NanoVNA")
                 return
-            for res in self.resources:
-                try:
-                    instr = self.rm.open_resource(res)
-                    idn = instr.query("*IDN?")
-                    display = f"{idn.strip()} ({res})"
-                    self.resource_map[display] = res
-                    self.combo.addItem(display)
-                except Exception:
-                    continue
+
+            # do a quick single scan (in thread) to prime data and update GUI via callback
+            try:
+                start = float(self.start_frequency.text() or 1e6)
+                stop = float(self.end_frequency.text() or 10e6)
+                points = int(self.sweep_points.text() or 201)
+            except Exception:
+                start, stop, points = 1e6, 10e6, 201
+
+            try:
+                freqs, s11 = self.vna.scan(start, stop, points)
+                impedance = self.vna.s11_to_impedance(s11)
+                resistance = impedance.real
+                data_package = {
+                    "timestamp": pd.Timestamp.now(),
+                    "scan_count": 0,
+                    "frequencies": freqs,
+                    "impedance": impedance,
+                    "resistance": resistance,
+                    "phase": np.angle(impedance, deg=True),
+                    "s11": s11
+                }
+                # schedule UI update (use same path as acquisition)
+                QTimer.singleShot(0, lambda pkg=data_package: self._on_vna_data(pkg))
+                QTimer.singleShot(0, lambda: self.statusBar().showMessage("Connected to NanoVNA", 5000))
+            except Exception as e:
+                self._notify("warning", "Initial Scan", f"Connected but initial scan failed: {e}")
+
         except Exception as e:
-            QMessageBox.critical(self, "VISA Error", str(e))
+            self._notify("critical", "Connect Error", str(e))
 
     def connect_to_instrument(self):
-        selected = self.combo.currentText()
-        resource = self.resource_map.get(selected, selected)
-        try:
-            try:
-                self.vna = NanoVNA()
-                self.vna.connect()
-                self.statusBar().showMessage("Connected to NanoVNA.")
-            except Exception as e:
-                QMessageBox.critical(self, "Connection Error", str(e))
-                    
+        """Public slot — triggered from UI. Spawns background thread to connect."""
+        selected = self.combo_ports.currentText()
+        # if user selected explicit visa resource, pass as hint (NanoVNA handler will auto-detect if None)
+        port_hint = None
+        if selected and selected.strip() and "NanoVNA" not in selected:
+            port_hint = selected
+        # spawn background connect to avoid freeze
+        threading.Thread(target=self._connect_worker, args=(None if "Auto-detect" in selected else port_hint,), daemon=True).start()
 
+    # ---------------------------
+    # Data handling (thread-safe)
+    # ---------------------------
+    def _on_vna_data(self, data_package: dict):
+        """
+        Called from background callback or initial scan thread.
+        Must only perform light-weight operations and schedule heavy UI work on main thread.
+        """
+        def _process():
+            try:
+                freqs = np.asarray(data_package.get("frequencies", []))
+                resistance = np.asarray(data_package.get("resistance", np.zeros_like(freqs)))
+                phase = np.asarray(data_package.get("phase", np.angle(data_package.get("impedance", np.zeros_like(freqs)), deg=True)))
+
+                # build new rows
+                timestamp = data_package.get("timestamp", pd.Timestamp.now())
+                rows = [{"Timestamp": timestamp, "Frequency(Hz)": float(f), "Resistance(Ω)": float(r), "Phase": float(p)}
+                        for f, r, p in zip(freqs, resistance, phase)]
+
+                if rows:
+                    new_df = pd.DataFrame(rows)
+                    self.data = pd.concat([self.data, new_df], ignore_index=True)
+                    # update table model
+                    self.table_model.set_dataframe(self.data)
+                    self.table_view.resizeColumnsToContents()
+                    # update plot
+                    self.update_plot()
+                    self.statusBar().showMessage(f"Received scan #{data_package.get('scan_count', '?')} ({len(freqs)} pts)", 5000)
+            except Exception as e:
+                self._notify("warning", "Data Processing Error", str(e))
+
+        # ensure runs on GUI thread
+        QTimer.singleShot(0, _process)
+
+    # ---------------------------
+    # Single sweep
+    # ---------------------------
+    def run_single_sweep(self):
+        """Synchronous single sweep wrapper — runs in GUI thread only if small; prefer background use."""
+        # run in a background thread to keep UI snappy
+        def worker():
+            try:
+                if self.vna is None or not getattr(self.vna, "is_connected", False):
+                    self._notify("warning", "Connection", "Device not connected.")
+                    return
+                start = float(self.start_frequency.text() or 1e6)
+                stop = float(self.end_frequency.text() or 10e6)
+                points = int(self.sweep_points.text() or 201)
+                freqs, s11 = self.vna.scan(start, stop, points)
+                impedance = self.vna.s11_to_impedance(s11)
+                resistance = impedance.real
+                data_package = {
+                    "timestamp": pd.Timestamp.now(),
+                    "scan_count": 0,
+                    "frequencies": freqs,
+                    "impedance": impedance,
+                    "resistance": resistance,
+                    "phase": np.angle(impedance, deg=True),
+                    "s11": s11
+                }
+                # push to UI
+                self._on_vna_data(data_package)
+            except Exception as e:
+                self._notify("warning", "Sweep Error", str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    # ---------------------------
+    # Start / Stop continuous logging
+    # ---------------------------
+    def start_logging_button(self):
+        """Start continuous logging: prefer NanoVNA.start_acquisition (threaded), else fallback to QTimer polling."""
+        if self.vna is None or not getattr(self.vna, "is_connected", False):
+            QMessageBox.warning(self, "Connection Error", "Please connect to the NanoVNA first.")
+            return
+
+        try:
             start = float(self.start_frequency.text() or 1e6)
             stop = float(self.end_frequency.text() or 10e6)
-            points = int(self.sweep_points.text() or "201")
-            freqs, resistances, impedance, _, _, _ = acquire_data(resource, start, stop, points)
-            self.impedance = np.array(impedance)
+            points = int(self.sweep_points.text() or 201)
+        except Exception:
+            QMessageBox.warning(self, "Input Error", "Invalid sweep parameters.")
+            return
 
-            Rm, Lm, Cm, C0, fs = parameter(freqs, self.impedance)
-            self.Rm, self.Lm, self.Cm, self.C0, self.fs = parameter(freqs, self.impedance)
-
-            # Update the UI with calculated parameters
-            if hasattr(self, 'rm_edit'):
-               self.rm_edit.setText(f"{self.Rm:.6f}")
-               self.lm_edit.setText(f"{self.Lm:.6e}")
-               self.cm_edit.setText(f"{self.Cm:.6e}")
-               self.c0_edit.setText(f"{self.C0:.6e}")
-
-            initial_guess = [Rm, Lm, Cm, C0]
-            result = least_squares(
-                lambda params: np.concatenate([
-                    np.real(butterworth(freqs, *params) - self.impedance),
-                    np.imag(butterworth(freqs, *params) - self.impedance)
-                ]),
-                initial_guess
-            )
-            self.Z_fit = butterworth(freqs, *result.x)
-            self.fit_btn.setEnabled(True)
-            timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
-            t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
-            self.data = pd.DataFrame({
-                "Timestamp": [t_seconds] * len(freqs),
-                "Frequency(Hz)": freqs,
-                "Resistance(Ω)": resistances,
-                "Phase": [0] * len(freqs)
-            })
-
-            self.model = TableModel(self.data)
-            self.model.dataChanged.connect(self.update_plot)
-            self.table.setModel(self.model)
-
-            self.update_plot()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Connection Error", str(e))
-
-    def insert_button_clicked(self):
-        self.data = pd.DataFrame({
-            "Timestamp": ["" for _ in range(10)],
-            "Frequency(Hz)": ["" for _ in range(10)],
-            "Resistance(Ω)": ["" for _ in range(10)],
-            "Phase": ["" for _ in range(10)]
-        })
-        self.model = TableModel(self.data)
-        self.model.dataChanged.connect(self.update_plot)
-        self.table.setModel(self.model)
-        
-        self.button1 = QPushButton("Insert Row")
-        self.button1.clicked.connect(self.insert_row)
-        self.button2 = QPushButton("Delete Row")
-        self.button2.clicked.connect(self.delete_row)
-        
-    def insert_row(self):
-        new_row = pd.DataFrame({
-            "Timestamp": [""],
-            "Frequency": [""],
-            "Resistance(Ω)": [""],
-            "Phase": [""]
-        })
-        curr_row = self.table.currentRow()
-        if curr_row == -1:
-            self.data = pd.concat([self.data, new_row], ignore_index=True)
-        else:
-            top = self.data.iloc[:curr_row + 1]
-            bottom= self.data.iloc[curr_row + 1:]
-            self.data = pd.concat([top, new_row, bottom], ignore_index=True)
-            
-        
-            
-    def delete_row(self):
-        curr_row = self.table.currentRow().row()
-        if curr_row < 0:
-            return QMessageBox.warning("Please select a Row to delete", self)
-        button = QMessageBox.question(self, "Are you sure, You want to Delete this row", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if button == QMessageBox.StandardButton.Yes:
-            self.data = self.data.drop(index=curr_row).reset_index(drop=True)
-            
-            self.model = TableModel(self.data)
-            self.model.dataChanged.connect(self.update_plot)
-            self.table.setModel(self.model)
-            
-            
-            
-            
-
-    def upload_button_clicked(self):
-        file, _ = QFileDialog.getOpenFileName(self, "Select File", "", "CSV (*.csv);;Excel (*.xlsx)")
+        started = False
         try:
-            if not file:
-                return
-            self.data = pd.read_csv(file) if file.endswith(".csv") else pd.read_excel(file)
-            for col in ["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Phase"]:
-                if col not in self.data.columns:
-                    self.data[col] = ""
-            self.model = TableModel(self.data)
-            self.model.dataChanged.connect(self.update_plot)
-            self.table.setModel(self.model)
-            
-            self.sweep_points.setText("1")
-
-            self.update_plot()
+            # pass callback that will be invoked from worker thread — callback should not touch GUI directly
+            started = self.vna.start_acquisition(start, stop, points, interval=2.0, callback=self.vna_callback_wrapper)
         except Exception as e:
-            QMessageBox.warning(self, "File Error", str(e))
+            started = False
+            self._notify("warning", "Acquisition", f"start_acquisition raised: {e}")
+
+        if started:
+            # thread-based acquisition started
+            self.btn_start.setEnabled(False)
+            self.btn_stop.setEnabled(True)
+            self.act_start.setEnabled(False)
+            self.act_stop.setEnabled(True)
+            self.statusBar().showMessage("Threaded logging started...", 5000)
+            return
+
+        # fallback to QTimer polling
+        try:
+            if not self.poll_timer.isActive():
+                self.poll_timer.start()
+                self.btn_start.setEnabled(False)
+                self.btn_stop.setEnabled(True)
+                self.act_start.setEnabled(False)
+                self.act_stop.setEnabled(True)
+                self.statusBar().showMessage("Logging started (timer fallback)...", 5000)
+        except Exception as e:
+            QMessageBox.warning(self, "Logging Error", str(e))
+
+    def vna_callback_wrapper(self, data_package):
+        """
+        This wrapper is passed to NanoVNA.start_acquisition.
+        NanoVNA will call it from a worker thread — the wrapper must schedule GUI updates on the main thread.
+        """
+        # pass to our main handler (it marshals to GUI thread)
+        try:
+            self._on_vna_data(data_package)
+        except Exception as e:
+            # do not let exceptions propagate to worker thread
+            self._notify("warning", "Callback Error", str(e))
+
+    def stop_logging_button(self):
+        """Stop threaded acquisition and timer fallback."""
+        try:
+            # stop NanoVNA threaded acquisition if active
+            if self.vna and getattr(self.vna, "acquisition_active", False):
+                try:
+                    self.vna.stop_acquisition()
+                except Exception:
+                    pass
+
+            # stop timer fallback
+            if self.poll_timer.isActive():
+                self.poll_timer.stop()
+
+            self.btn_start.setEnabled(True)
+            self.btn_stop.setEnabled(False)
+            self.act_start.setEnabled(True)
+            self.act_stop.setEnabled(False)
+
+            self.statusBar().showMessage("Logging stopped.", 5000)
+        except Exception as e:
+            QMessageBox.warning(self, "Stop Error", str(e))
+
+    # ---------------------------
+    # Plot update
+    # ---------------------------
+    def update_plot(self):
+        """Update the Resistance vs Frequency plot from current self.data."""
+        try:
+            if self.data.empty or "Frequency(Hz)" not in self.data.columns or "Resistance(Ω)" not in self.data.columns:
+                # clear plot
+                self.plot_widget.clear()
+                return
+
+            x = pd.to_numeric(self.data["Frequency(Hz)"], errors='coerce')
+            y = pd.to_numeric(self.data["Resistance(Ω)"], errors='coerce')
+            mask = x.notnull() & y.notnull()
+            if mask.sum() == 0:
+                self.plot_widget.clear()
+                return
+            xvals = x[mask].astype(float).values
+            yvals = y[mask].astype(float).values
+            self.plot_widget.clear()
+            self.plot_widget.plot(xvals, yvals, pen='r', symbol='o', symbolSize=5)
+        except Exception as e:
+            self._notify("warning", "Plot Error", str(e))
+
+    # ---------------------------
+    # Export
+    # ---------------------------
+    def export_csv(self):
+        try:
+            if self.data.empty:
+                QMessageBox.information(self, "Export", "No data to export.")
+                return
+            fname, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV files (*.csv)")
+            if not fname:
+                return
+            self.data.to_csv(fname, index=False)
+            self.statusBar().showMessage(f"Saved {len(self.data)} rows to {fname}", 6000)
+        except Exception as e:
+            QMessageBox.warning(self, "Export Error", str(e))
+
+    # ---------------------------
+    # Theme toggle
+    # ---------------------------
+    def toggle_theme(self):
+        self.is_dark = not self.is_dark
+        if self.is_dark:
+            # simple dark stylesheet
+            self.setStyleSheet("""
+                QWidget { background: #202020; color: #e0e0e0; }
+                QLineEdit, QComboBox, QTableView { background: #2a2a2a; color: #e0e0e0; }
+                QToolBar { background: #2a2a2a; }
+                QStatusBar { background: #252525; color: #cfcfcf; }
+            """)
+            self.plot_widget.setBackground('#2a2a2a')
+        else:
+            self.setStyleSheet("")
+            self.plot_widget.setBackground('w')
+
+    # ---------------------------
+    # Analysis windows & calculators
+    # ---------------------------
+    def sauerbrey_konazawa(self):
+        """Open Sauerbrey & Konazawa dialog (simple implementation)."""
+        if not MODELS_AVAILABLE:
+            QMessageBox.information(self, "Models Missing", "Sauerbrey/Konazawa models not found in Models/ — ensure they're available.")
+            return
+
+        dlg = QWidget()
+        dlg.setWindowTitle("Sauerbrey & Konazawa")
+        dlg.resize(700, 480)
+        layout = QVBoxLayout(dlg)
+
+        form = QFormLayout()
+        f0 = QLineEdit("5000000")
+        density = QLineEdit("2650")
+        shear = QLineEdit("2.947e10")
+        area = QLineEdit("1e-4")
+        form.addRow("Resonant freq (Hz):", f0)
+        form.addRow("Quartz density (kg/m³):", density)
+        form.addRow("Shear modulus (Pa):", shear)
+        form.addRow("Electrode area (m²):", area)
+
+        calc_btn = QPushButton("Calculate Sauerbrey Mass")
+        result = QLineEdit()
+        result.setReadOnly(True)
+
+        def _calc():
+            try:
+                ff0 = float(f0.text())
+                dd = float(density.text())
+                ss = float(shear.text())
+                aa = float(area.text())
+                # latest frequency from data
+                if self.data.empty or "Frequency(Hz)" not in self.data.columns:
+                    QMessageBox.warning(self, "Data Error", "No frequency data available.")
+                    return
+                ft = float(pd.to_numeric(self.data["Frequency(Hz)"], errors='coerce').dropna().iloc[-1])
+                mass_change = sauerbrey(ff0, dd, ss, ft, aa)
+                result.setText(f"{mass_change:.6e}")
+            except Exception as e:
+                QMessageBox.warning(self, "Calculation Error", str(e))
+
+        calc_btn.clicked.connect(_calc)
+
+        layout.addLayout(form)
+        layout.addWidget(calc_btn)
+        layout.addWidget(QLabel("Mass Change (kg):"))
+        layout.addWidget(result)
+        dlg.setLayout(layout)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dlg.show()
 
     def crystallizationdynamics(self):
+        """Open Crystallization Dynamics window with multi-plot + BVD params."""
         try:
-            # Create a new window for crystallization dynamics & kinetics
-            self.crystallization_widget = QWidget()
-            self.crystallization_widget.setWindowTitle("Crystallization Dynamics & Kinetics")
-            self.crystallization_widget.resize(1400, 1200)
-            main_layout = QVBoxLayout(self.crystallization_widget)
-            main_splitter = QSplitter(Qt.Orientation.Horizontal)
-            
+            # Close if already open
+            if hasattr(self, 'cryst_dyn_win') and self.cryst_dyn_win:
+                self.cryst_dyn_win.close()
 
-              # Left panel (controls)
+            # New window
+            self.cryst_dyn_win = QWidget()
+            self.cryst_dyn_win.setWindowTitle("Crystallization Dynamics")
+            self.cryst_dyn_win.resize(1400, 900)
+            layout = QVBoxLayout(self.cryst_dyn_win)
+
+            # Toolbar for this window
+            toolbar = QToolBar()
+            toolbar.setIconSize(QSize(16, 16))
+            act_view_table = QAction("View Table", self.cryst_dyn_win)
+            act_view_table.triggered.connect(self.Viewtable)
+            act_export = QAction("Export Table", self.cryst_dyn_win)
+            act_export.triggered.connect(lambda: self._export_df(self.cryst_dyn_df, "cryst_dynamics.csv"))
+            toolbar.addAction(act_view_table)
+            toolbar.addAction(act_export)
+            layout.addWidget(toolbar)
+
+            splitter = QSplitter(Qt.Orientation.Horizontal)
+
+            # Left plots
             left_widget = QWidget()
             left_layout = QVBoxLayout(left_widget)
             left_layout.setContentsMargins(0, 0, 0, 0)
-            left_layout.setSpacing(5)
-            
-            right_splitter = QSplitter(Qt.Orientation.Vertical)
+            self.plot_resistance = pg.PlotWidget(title="Motional Resistance vs Time")
+            self.plot_resistance.setLabel("left", "Rm (Ω)")
+            self.plot_resistance.setLabel("bottom", "Time (s)")
+
+            self.plot_frequency = pg.PlotWidget(title="Resonance Frequency vs Time")
+            self.plot_frequency.setLabel("left", "Fs (Hz)")
+            self.plot_frequency.setLabel("bottom", "Time (s)")
+
+            self.plot_inductance = pg.PlotWidget(title="Motional Inductance vs Time")
+            self.plot_inductance.setLabel("left", "Lm (H)")
+            self.plot_inductance.setLabel("bottom", "Time (s)")
+
+            self.plot_capacitance = pg.PlotWidget(title="Motional Capacitance vs Time")
+            self.plot_capacitance.setLabel("left", "Cm (F)")
+            self.plot_capacitance.setLabel("bottom", "Time (s)")
+
+            for pw in (self.plot_resistance, self.plot_frequency, self.plot_inductance, self.plot_capacitance):
+                left_layout.addWidget(pw)
+
+            splitter.addWidget(left_widget)
+
+            # Right controls
             right_widget = QWidget()
             right_layout = QVBoxLayout(right_widget)
-            right_layout.setSpacing(10)
+            group_box = QGroupBox("Latest BVD Parameters")
+            form = QFormLayout()
+            self.rm_edit = QLineEdit(); self.rm_edit.setReadOnly(True)
+            self.lm_edit = QLineEdit(); self.lm_edit.setReadOnly(True)
+            self.cm_edit = QLineEdit(); self.cm_edit.setReadOnly(True)
+            self.c0_edit = QLineEdit(); self.c0_edit.setReadOnly(True)
+            self.f_edit = QLineEdit();  self.f_edit.setReadOnly(True)
+            form.addRow("Fs (Hz):", self.f_edit)
+            form.addRow("Rm (Ω):", self.rm_edit)
+            form.addRow("Lm (H):", self.lm_edit)
+            form.addRow("Cm (F):", self.cm_edit)
+            form.addRow("C0 (F):", self.c0_edit)
+            group_box.setLayout(form)
+            right_layout.addWidget(group_box)
+            right_layout.addStretch()
+            splitter.addWidget(right_widget)
 
-            # Section: Plots
-            plot_layout = QVBoxLayout()
+            layout.addWidget(splitter)
+            self.cryst_dyn_win.show()
 
-            self.plot_resistance = pg.PlotWidget()
-            self.plot_resistance.setTitle("Motional Resistance vs Time")
-            self.plot_resistance.setLabel("left", "Motional Resistance (Ω)")
-            self.plot_resistance.setLabel("bottom", "Time (s)")
-            plot_layout.addWidget(self.plot_resistance)
+            self.plot_crystallization_data()
 
-            self.plot_frequency = pg.PlotWidget()
-            self.plot_frequency.setTitle("Resonance Frequency vs Time")
-            self.plot_frequency.setLabel("left", "Resonance Frequency (Hz)")
-            self.plot_frequency.setLabel("bottom", "Time (s)")
-            plot_layout.addWidget(self.plot_frequency)
-
-
-            # Section: Parameter Inputs
-            #BVD
-            group_box = QGroupBox("Butterworth Van Dyke Model")
-
-            param_form1 = QFormLayout()
-            self.rm_edit = QLineEdit()
-            self.lm_edit = QLineEdit()
-            self.cm_edit = QLineEdit()
-            self.c0_edit = QLineEdit()
-            self.f_edit = QLineEdit()
-
-            param_form1.addRow("Frequency (f):", self.f_edit)
-            param_form1.addRow("Motional Resistance (Rm):", self.rm_edit)
-            param_form1.addRow("Motional Inductance (Lm):", self.lm_edit)
-            param_form1.addRow("Motional Capacitance (Cm):", self.cm_edit)
-            param_form1.addRow("Static Capacitance (C0):", self.c0_edit)
-            self.fit_btn = QPushButton("Fit BVD Model")
-            param_form1.addRow(self.fit_btn)
-            
-            
-            #Avrami
-            group_box1 = QGroupBox("Avrami Model")
-
-            param_form2 = QFormLayout()
-            self.f0_edit = QLineEdit()
-            self.finf_edit = QLineEdit()
-            self.t_edit = QLineEdit()
-            self.k_edit = QLineEdit()
-            self.n_edit = QLineEdit()
-            param_form2.addRow("Initial Frequency (f₀):", self.f0_edit)
-            param_form2.addRow("Final Frequency (f_inf):", self.finf_edit)
-            param_form2.addRow("Time (t):", self.t_edit)
-            param_form2.addRow("Crystallization Rate (k):", self.k_edit)
-            param_form2.addRow("Avrami Exponent (n):", self.n_edit)
-            self.fit_btn1 = QPushButton("Fit Avrami")
-            param_form2.addRow(self.fit_btn1)
-
-            group_box.setLayout(param_form1)
-            group_box1.setLayout(param_form2)
-            right_splitter.addWidget(group_box)
-            right_splitter.addWidget(group_box1)
-
-            # Fit Button
-            self.fit_btn1.clicked.connect(self.fit_data1)
-            self.fit_btn.clicked.connect(self.fit_data)
-            self.fit_btn1.setEnabled(True)
-            self.fit_btn.setEnabled(True)
-
-            # Add to main layout
-            left_layout.addLayout(plot_layout)
-            left_widget.setLayout(left_layout)
-            main_splitter.addWidget(left_widget)
-            main_splitter.addWidget(right_splitter)
-            main_layout.addWidget(main_splitter)
-
-            # Plot data from main table
-            if not self.data.empty:
-                try:
-                    points = int(self.sweep_points.text() or "201")
-                    total_rows = len(self.data)
-
-                    if points > 1 and total_rows % points != 0:
-                        QMessageBox.warning(self, "Data Error", "Data length is not divisible by number of sweep points.")
-                        return
-
-                    num_sweeps = total_rows // points
-                    if num_sweeps == 0:
-                        QMessageBox.warning(self, "Data Error", "No data available for plotting.")
-                        return
-
-                    t_seconds = []
-                    rm_values = []
-                    fs_values = []
-
-                    for i in range(num_sweeps):
-                        start = i * points
-                        end = start + points
-                        sweep = self.data.iloc[start:end]
-
-                        freq = pd.to_numeric(sweep["Frequency(Hz)"].to_numpy(), errors='coerce')
-
-                        if "Resistance(Ω)" in sweep.columns and "Reactance(Ω)" in sweep.columns:
-                            resistance = pd.to_numeric(sweep["Resistance(Ω)"], errors='coerce')
-                            reactance = pd.to_numeric(sweep["Reactance(Ω)"], errors='coerce')
-                            impedance = resistance + 1j * reactance
-                        elif "Impedance(Ω)" in sweep.columns:
-                            impedance = pd.to_numeric(sweep["Impedance(Ω)"], errors='coerce')
-                            resistance = impedance.real
-                        else:
-                            QMessageBox.warning(self, "Data Error", "No valid impedance data found for fitting.")
-                            return
-
-                        try:
-                            Rm, Lm, Cm, C0, fs = parameter(freq, impedance, resistance)
-                        except Exception as e:
-                            QMessageBox.warning(self, "Fitting Error", f"Error in parameter extraction at sweep {i+1}: {str(e)}")
-                            continue
-
-                        self.Rm, self.Lm, self.Cm, self.C0, self.fs = Rm, Lm, Cm, C0, fs
-
-                        rm_values.append(Rm)
-                        fs_values.append(fs)
-
-                        ts = pd.to_datetime(sweep["Timestamp"], errors="coerce")
-                        avg_time = (ts - ts.min()).dt.total_seconds().mean() if ts.notna().all() else i
-                        t_seconds.append(avg_time)
-
-                    # Convert to arrays
-                    t_seconds = np.array(t_seconds)
-                    F = np.array(fs_values)
-                    R = np.array(rm_values)
-                    timestamps = np.array(t_seconds)
-
-                    # Plot
-                    self.plot_resistance.clear()
-                    self.plot_resistance.plot(t_seconds, rm_values, pen='b', symbol='o', symbolSize=5, symbolBrush='r', name='Motional Resistance')
-
-                    self.plot_frequency.clear()
-                    self.plot_frequency.plot(t_seconds, fs_values, pen='r', symbol='o', symbolSize=5, symbolBrush='g', name='Resonance Frequency')
-
-                    # Set fitted values in UI
-                    if hasattr(self, "Rm"):
-                        self.rm_edit.setText(f"{self.Rm:.6f}")
-                        self.lm_edit.setText(f"{self.Lm:.6e}")
-                        self.cm_edit.setText(f"{self.Cm:.6e}")
-                        self.c0_edit.setText(f"{self.C0:.6e}")
-                        self.f_edit.setText(f"{self.fs:.2f}")
-                    else:
-                        raise AttributeError("Parameters not available for BVD fit.")
-
-                    # BVD fitting (optional)
-                    if self.fit_btn.isEnabled():
-                        try:
-                           mask_f = np.isfinite(F)
-                           mask_r = np.isfinite(R)
-
-                           popt = fit_data(t_seconds[mask_f], F[mask_f], R[mask_r])
-                           self.rm_edit.setText(f"{popt[0]:.6f}")
-                           self.lm_edit.setText(f"{popt[1]:.6e}")
-                           self.cm_edit.setText(f"{popt[2]:.6e}")
-                           self.c0_edit.setText(f"{popt[3]:.6e}")
-                           self.f_edit.setText(f"{popt[4]:.2f}")
-                           self.plot_resistance.plot(t_seconds[mask_r], butterworth(F[mask_f], *popt), pen='m', name='BVD Fit')
-                           QMessageBox.information(self.crystallization_widget, "BVD Fit", "BVD Model Fitting completed successfully!")
-                        except Exception as e:
-                            QMessageBox.warning(self.crystallization_widget, "BVD Fit Error", str(e))
-
-                    # Avrami fitting
-                    
-                except Exception as e:
-                     QMessageBox.warning(self, "Window Error", str(e))
         except Exception as e:
             QMessageBox.warning(self, "Window Error", str(e))
-            
-    def crystallizationkinetics(self):
-        
-            self.crystallization_widget = QWidget()
-            self.crystallization_widget.setWindowTitle("Crystallization Dynamics & Kinetics")
-            self.crystallization_widget.resize(1400, 1200)
-            main_layout = QVBoxLayout(self.crystallization_widget)
-            main_splitter = QSplitter(Qt.Orientation.Horizontal)
-            
 
-              # Left panel (controls)
+    def plot_crystallization_data(self):
+        """Extract sweep-by-sweep BVD params and update dynamics plots."""
+        try:
+            from Models.Butterworth import parameter  # local import to avoid crash if missing
+        except ImportError:
+            QMessageBox.warning(self, "Missing Model", "Butterworth model not found.")
+            return
+
+        try:
+            if self.data.empty:
+                QMessageBox.warning(self, "Data Error", "No data to analyze.")
+                return
+
+            points = int(self.sweep_points.text() or 201)
+            if points <= 0:
+                QMessageBox.warning(self, "Input Error", "Invalid sweep points.")
+                return
+
+            total_rows = len(self.data)
+            if total_rows < points:
+                QMessageBox.warning(self, "Data Error", "Insufficient data for one sweep.")
+                return
+
+            if total_rows % points != 0:
+                QMessageBox.warning(self, "Data Error", "Data length not divisible by sweep points.")
+                return
+
+            num_sweeps = total_rows // points
+            t_seconds, rm_values, fs_values, lm_values, cm_values = [], [], [], [], []
+
+            for i in range(num_sweeps):
+                block = self.data.iloc[i * points:(i + 1) * points]
+                freqs = pd.to_numeric(block["Frequency(Hz)"], errors='coerce').dropna().values
+                resist = pd.to_numeric(block["Resistance(Ω)"], errors='coerce').fillna(0).values
+                if len(freqs) == 0:
+                    continue
+                impedance = resist + 0j
+                try:
+                    Rm, Lm, Cm, C0, fs = parameter(freqs, impedance, resist)
+                    rm_values.append(Rm)
+                    fs_values.append(fs)
+                    lm_values.append(Lm)
+                    cm_values.append(Cm)
+                    t_seconds.append(i * 2)
+                except Exception:
+                    continue
+
+            if not rm_values:
+                QMessageBox.warning(self, "Processing Error", "No sweeps could be processed.")
+                return
+
+            # Save for table/export
+            self.cryst_dyn_df = pd.DataFrame({
+                "Time(s)": t_seconds,
+                "Rm(Ω)": rm_values,
+                "Lm(H)": lm_values,
+                "Cm(F)": cm_values,
+                "Fs(Hz)": fs_values
+            })
+
+            # Update latest params
+            self.rm_edit.setText(f"{rm_values[-1]:.6f}")
+            self.lm_edit.setText(f"{lm_values[-1]:.6e}")
+            self.cm_edit.setText(f"{cm_values[-1]:.6e}")
+            self.c0_edit.setText(f"{C0:.6e}" if 'C0' in locals() else "")
+            self.f_edit.setText(f"{fs_values[-1]:.2f}")
+
+            # Plot
+            self.plot_resistance.clear()
+            self.plot_resistance.plot(t_seconds, rm_values, pen='b', symbol='o')
+
+            self.plot_frequency.clear()
+            self.plot_frequency.plot(t_seconds, fs_values, pen='r', symbol='o')
+
+            self.plot_inductance.clear()
+            self.plot_inductance.plot(t_seconds, lm_values, pen='g', symbol='o')
+
+            self.plot_capacitance.clear()
+            self.plot_capacitance.plot(t_seconds, cm_values, pen='m', symbol='o')
+
+        except Exception as e:
+            QMessageBox.warning(self, "Plotting Error", str(e))
+
+    def Viewtable(self):
+        """Show computed dynamics table in a separate window."""
+        try:
+            if not hasattr(self, 'cryst_dyn_df') or self.cryst_dyn_df.empty:
+                QMessageBox.warning(self, "No Data", "Run dynamics analysis first.")
+                return
+            table_win = QWidget()
+            table_win.setWindowTitle("Crystallization Dynamics Table")
+            table_win.resize(800, 600)
+            layout = QVBoxLayout(table_win)
+            model = TableModel(self.cryst_dyn_df)
+            table = QTableView()
+            table.setModel(model)
+            table.resizeColumnsToContents()
+            layout.addWidget(table)
+            table_win.show()
+        except Exception as e:
+            QMessageBox.warning(self, "Table Error", str(e))
+
+    def crystallizationkinetics(self):
+        """Open Crystallization Kinetics (Avrami) window."""
+        try:
+            if hasattr(self, 'cryst_kin_win') and self.cryst_kin_win:
+                self.cryst_kin_win.close()
+
+            self.cryst_kin_win = QWidget()
+            self.cryst_kin_win.setWindowTitle("Crystallization Kinetics (Avrami)")
+            self.cryst_kin_win.resize(1000, 700)
+            layout = QVBoxLayout(self.cryst_kin_win)
+
+            splitter = QSplitter(Qt.Orientation.Horizontal)
+
+            # Left plot
             left_widget = QWidget()
             left_layout = QVBoxLayout(left_widget)
-            left_layout.setContentsMargins(0, 0, 0, 0)
-            left_layout.setSpacing(5)
-            
-            right_splitter = QSplitter(Qt.Orientation.Vertical)
+            self.plot_crystallization_fraction = pg.PlotWidget(title="X(t) vs Time")
+            self.plot_crystallization_fraction.setLabel("left", "X(t)")
+            self.plot_crystallization_fraction.setLabel("bottom", "Time (s)")
+            left_layout.addWidget(self.plot_crystallization_fraction)
+            splitter.addWidget(left_widget)
+
+            # Right params
             right_widget = QWidget()
             right_layout = QVBoxLayout(right_widget)
-            right_layout.setSpacing(10)
-        
-            plot_layout = QVBoxLayout()
-            
-            self.plot_crystallization_fraction = pg.PlotWidget()
-            self.plot_crystallization_fraction.setTitle("Crystallization Fraction X(t) vs Time")
-            plot_layout.addWidget(self.plot_crystallization_fraction)
-            
-            group_box1 = QGroupBox("Avrami Model")
+            group = QGroupBox("Avrami Fit Parameters")
+            form = QFormLayout()
+            self.f0_edit = QLineEdit(); self.f0_edit.setReadOnly(True)
+            self.finf_edit = QLineEdit(); self.finf_edit.setReadOnly(True)
+            self.k_edit = QLineEdit(); self.n_edit = QLineEdit()
+            form.addRow("f₀:", self.f0_edit)
+            form.addRow("f∞:", self.finf_edit)
+            form.addRow("k:", self.k_edit)
+            form.addRow("n:", self.n_edit)
+            fit_btn = QPushButton("Fit Avrami")
+            fit_btn.clicked.connect(self.plot_kinetics_data)
+            form.addRow(fit_btn)
+            group.setLayout(form)
+            right_layout.addWidget(group)
+            splitter.addWidget(right_widget)
 
-            param_form2 = QFormLayout()
-            self.f0_edit = QLineEdit()
-            self.finf_edit = QLineEdit()
-            self.t_edit = QLineEdit()
-            self.k_edit = QLineEdit()
-            self.n_edit = QLineEdit()
-            param_form2.addRow("Initial Frequency (f₀):", self.f0_edit)
-            param_form2.addRow("Final Frequency (f_inf):", self.finf_edit)
-            param_form2.addRow("Time (t):", self.t_edit)
-            param_form2.addRow("Crystallization Rate (k):", self.k_edit)
-            param_form2.addRow("Avrami Exponent (n):", self.n_edit)
-            self.fit_btn1 = QPushButton("Fit Avrami")
-            param_form2.addRow(self.fit_btn1)
+            layout.addWidget(splitter)
+            self.cryst_kin_win.show()
 
+            self.plot_kinetics_data()
 
-            group_box1.setLayout(param_form2)
-            right_splitter.addWidget(group_box1)
-            
-            self.fit_btn1.clicked.connect(self.fit_data1)
-            self.fit_btn1.setEnabled(True)
-
-            # Add to main layout
-            left_layout.addLayout(plot_layout)
-            left_widget.setLayout(left_layout)
-            main_splitter.addWidget(left_widget)
-            main_splitter.addWidget(right_splitter)
-            main_layout.addWidget(main_splitter)
-            
-            if not self.data.empty:
-            
-                    try:
-                        points = int(self.sweep_points.text() or "201")
-                        total_rows = len(self.data)
-                        num_sweeps = total_rows // points
-                        
-                        
-                        
-
-                        k_values = []
-                        fs_values = []
-                        n_values = []
-                        sweep_indices = []
-
-                        for i in range(num_sweeps):
-                            start = i * points
-                            end = start + points
-
-                            t_sweep = self.data['Time'][start:end]
-                            freq_sweep = self.data['Frequency'][start:end]
-
-                            try:
-                                k, n = fit(t_sweep, freq_sweep)
-                                k_values.append(k)
-                                n_values.append(n)
-                                sweep_indices.append(i)
-                            except ValueError as e:
-                                print(f"Sweep {i} skipped: {e}")
-
-                        F = np.array(fs_values)
-                        t_seconds = np.array([i for i in range(len(F))])  # or use your actual timestamps
-
-                        mask_f_valid = np.isfinite(F) & np.isfinite(t_seconds)
-
-                        if mask_f_valid.sum() >= 3:
-                            t_fit = t_seconds[mask_f_valid]
-                            F_fit = F[mask_f_valid]
-
-                            try:
-                                k_val, n_val = fit(t_fit, F_fit)
-                                self.k_edit.setText(f"{k_val:.4e}")
-                                self.n_edit.setText(f"{n_val:.2f}")
-
-                                X_t = formula(k_val, n_val, t_seconds)
-                                X_actual = compute_X_t(F, F[0], F[-1])
-
-                                self.plot_crystallization_fraction.clear()
-                                self.plot_crystallization_fraction.plot(t_seconds, X_t, pen='m', name='Fitted')
-                                self.plot_crystallization_fraction.plot(t_seconds, X_actual, pen='b', symbol='o', symbolBrush='b', name='Actual')
-                                self.plot_crystallization_fraction.plot(sweep_indices, k_values, pen='r', symbol='o', symbolBrush='b', name='kinetic vs time')
-                                self.plot_crystallization_fraction.plot(sweep_indices, n_values, pen='g', symbol='o', symbolBrush='b', name='Growth-Rate vs time')
-
-                                QMessageBox.information(self.crystallization_widget, "Avrami Fit", f"Crystallization Rate k: {k_val:.4e}, Exponent n: {n_val:.2f}")
-                            except ValueError as e:
-                                QMessageBox.warning(self.crystallization_widget, "Avrami Fit Error", str(e))
-                        else:
-                            QMessageBox.warning(self.crystallization_widget, "Avrami Fit Error", "Insufficient valid data points for global Avrami fitting.")
-                    except Exception as e:
-                        QMessageBox.critical(self.crystallization_widget, "Unexpected Error", str(e))
-
-
-        
-            
-    
-    def _validate_avrami_data(self, timestamps, freqs):
-        """
-        Helper method to validate data for Avrami fitting.
-        """
-        try:
-            # Check basic data requirements
-            if timestamps.empty or freqs.empty:
-                return False, "No data available"
-            
-            # Check for sufficient valid data points
-            mask = ~(timestamps.isna() | freqs.isna())
-            valid_count = mask.sum()
-            
-            if valid_count < 3:
-                return False, f"Insufficient valid data points ({valid_count}). Need at least 3."
-            
-            # Check for frequency variation
-            freqs_clean = freqs[mask]
-            freq_range = freqs_clean.max() - freqs_clean.min()
-            
-            if freq_range < 1e-6:
-                return False, "Frequency data shows insufficient variation for meaningful fitting"
-            
-            return True, "Data validation passed"
-            
         except Exception as e:
-            return False, f"Data validation error: {str(e)}"
-        
-    def fit_data1(self):
+            QMessageBox.warning(self, "Window Error", str(e))
+
+    def plot_kinetics_data(self):
+        """Compute and plot crystallization fraction + Avrami fit."""
         try:
-            # Check if data is loaded
+            from Models.Avrami import compute_X_t, fit as avrami_fit, formula as avrami_formula
+        except ImportError:
+            QMessageBox.warning(self, "Missing Model", "Avrami model not found.")
+            return
+
+        try:
             if self.data.empty:
-                QMessageBox.warning(self, "Data Error", "No data loaded. Please upload data first.")
+                QMessageBox.warning(self, "Data Error", "No data for kinetics.")
                 return
-            
+
             timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
-            t_seconds = (timestamps - timestamps.min()).dt.total_seconds()
             freqs = pd.to_numeric(self.data["Frequency(Hz)"], errors="coerce")
-
-            # Validate data first
-            is_valid, error_msg = self._validate_avrami_data(timestamps, freqs)
-            if not is_valid:
-                QMessageBox.warning(self, "Data Validation Error", error_msg)
+            mask = ~(timestamps.isna() | freqs.isna())
+            if mask.sum() < 3:
+                QMessageBox.warning(self, "Data Error", "Too few points for analysis.")
                 return
 
-            # Remove NaN values
-            mask = ~(timestamps.isna() | freqs.isna())
-            t_clean = t_seconds[mask]
-            freqs_clean = freqs[mask]
+            t_seconds = (timestamps[mask] - timestamps[mask].min()).dt.total_seconds().values
+            fvals = freqs[mask].values
+            f0, finf = fvals[0], fvals[-1]
+            self.f0_edit.setText(f"{f0:.2f}")
+            self.finf_edit.setText(f"{finf:.2f}")
 
-            # Check if manual f0 and finf are provided
-            if self.f0_edit.text() and self.finf_edit.text():
-                try:
-                    f0 = float(self.f0_edit.text())
-                    finf = float(self.finf_edit.text())
-                    
-                    if abs(f0 - finf) < 1e-10:
-                        QMessageBox.warning(self, "Input Error", "Initial and final frequencies must be different.")
-                        return
-                        
-                except ValueError:
-                    QMessageBox.warning(self, "Input Error", "Initial and Final Frequency must be valid numbers.")
-                    return
-            else:
-                # Use automatic detection from data
-                f0 = freqs_clean[0]
-                finf = freqs_clean[-1]
-                self.f0_edit.setText(f"{f0:.2f}")
-                self.finf_edit.setText(f"{finf:.2f}")
-
-            # Perform the fit
-            k, n = fit(t_clean, freqs_clean)
-            self.k_edit.setText(f"{k:.4e}")
-            self.n_edit.setText(f"{n:.2f}")
-
-            # Plot the fitted curve
-            X_fit = formula(k, n, t_seconds)
+            X_actual = compute_X_t(fvals, f0, finf)
             self.plot_crystallization_fraction.clear()
-            self.plot_crystallization_fraction.plot(t_seconds, X_fit, pen='m', name='Fitted Curve')
-            
-            # Also plot the actual crystallization fraction for comparison
-            X_actual = compute_X_t(freqs, f0, finf)
-            self.plot_crystallization_fraction.plot(t_seconds, X_actual, pen='b', symbol='o', symbolBrush='b', name='Actual Data')
-            
-            QMessageBox.information(self, "Avrami Fit Success", f"Fitting completed successfully!\nCrystallization Rate k: {k:.4e}\nAvrami Exponent n: {n:.2f}")
+            self.plot_crystallization_fraction.plot(t_seconds, X_actual, pen='b', symbol='o')
+
+            # Fit Avrami
+            try:
+                k, n = avrami_fit(t_seconds, fvals)
+                self.k_edit.setText(f"{k:.3e}")
+                self.n_edit.setText(f"{n:.3f}")
+                X_fit = avrami_formula(k, n, t_seconds)
+                self.plot_crystallization_fraction.plot(t_seconds, X_fit, pen='r')
+            except Exception as e:
+                QMessageBox.warning(self, "Fit Error", str(e))
 
         except Exception as e:
-            QMessageBox.warning(self, "Avrami Fit Error", str(e))
-        
+            QMessageBox.warning(self, "Plotting Error", str(e))
 
-    def fit_data(self):
+    def _export_df(self, df, default_name):
+        """Utility: export a DataFrame to CSV."""
         try:
-            if hasattr(self, "fit_plot_window") and self.fit_plot_window:
-                self.fit_plot_window.close()
-            self.fit_plot_window = pg.GraphicsLayoutWidget(show=True, title="Butterworth Model Fit")
-            self.fit_plot_window.resize(800, 600)
-
-            plot_widget = self.fit_plot_window.addPlot(title="Measured and Fitted Impedance vs Frequency")
-            plot_widget.setLabel("left", "Impedance (Ohms)")
-            plot_widget.setLabel("bottom", "Frequency (Hz)")
-
-            if hasattr(self, "impedance") and hasattr(self, "Z_fit") and self.impedance is not None and self.Z_fit is not None:
-                plot_widget.plot(self.freqs, np.abs(self.impedance), pen='b', name='Measured Impedance')
-                plot_widget.plot(self.freqs, np.abs(self.Z_fit), pen='r', name='Fitted Impedance')
-            else:
-                QMessageBox.warning(self, "Fit Error", "Impedance data or fit result is missing.")
+            if df is None or df.empty:
+                QMessageBox.warning(self, "Export", "No data to export.")
+                return
+            fname, _ = QFileDialog.getSaveFileName(self, "Save CSV", default_name, "CSV files (*.csv)")
+            if not fname:
+                return
+            df.to_csv(fname, index=False)
+            self.statusBar().showMessage(f"Saved {len(df)} rows to {fname}", 6000)
         except Exception as e:
-            QMessageBox.warning(self, "Fit Error", str(e))
+            QMessageBox.warning(self, "Export Error", str(e))
 
-    def sauerbrey_konazawa(self):
+    # ---------------------------
+    # Cleanup on close
+    # ---------------------------
+    def closeEvent(self, event):
         try:
-            layout = QVBoxLayout()
-            self.sauerbrey_konazawa_widget = QWidget()
-            self.sauerbrey_konazawa_widget.setLayout(layout)
-            self.sauerbrey_konazawa_widget.setWindowTitle("Sauerbrey & Konazawa")
-            self.sauerbrey_konazawa_widget.resize(900, 700)
-            self.sauerbrey_konazawa_widget.show()
+            if self.poll_timer and self.poll_timer.isActive():
+                self.poll_timer.stop()
+            if self.vna:
+                try:
+                    self.vna.stop_acquisition()
+                except Exception:
+                    pass
+                try:
+                    self.vna.disconnect()
+                except Exception:
+                    pass
+            event.accept()
+        except Exception:
+            event.accept()
 
-            group_box = QGroupBox("Sauerbrey Equation Parameters")
-            group_layout = QFormLayout()
-            group_layout.addRow(self.label1_sauer, self.resonant)
-            group_layout.addRow(self.label4_sauer, self.density)
-            group_layout.addRow(self.label5_sauer, self.shear)
-            group_layout.addRow(self.label6_sauer, self.area)
-            group_box.setLayout(group_layout)
-            layout.addWidget(group_box)
 
-            group_box1 = QGroupBox("Konazawa Equation Parameters")
-            group_layout1 = QFormLayout()
-            group_layout1.addRow(self.label1_sauer, self.resonant)
-            group_layout1.addRow(self.label4_sauer, self.density)
-            group_layout1.addRow(self.label5_sauer, self.shear)
-            group_layout1.addRow(self.label6_sauer, self.area)
-            group_box1.setLayout(group_layout1)
-            layout.addWidget(group_box1)
+# ---------------------------
+# Run application
+# ---------------------------
+def main():
+    app = QApplication(sys.argv)
+    win = MainWindow()
+    win.show()
+    sys.exit(app.exec())
 
-        except Exception as e:
-            QMessageBox.warning(self, "Try Again by opening again, If the error persists, reinstall the GUI", str(e))
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
+    main()
