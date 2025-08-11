@@ -1,12 +1,16 @@
 
+        
 import sys
 import os
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 import threading
 import time
 from datetime import datetime
 from functools import partial
 from typing import Optional
-from VNA_Data.Acquire_data import NanoVNA
+from Acquire_data import NanoVNA
 
 
 
@@ -83,15 +87,29 @@ class MainWindow(QMainWindow):
 
         # state / models
         self.vna: Optional[NanoVNA] = None
+
+        # Create table immediately
+        self.table = QTableView()
+        self.setCentralWidget(self.table)
+
+        # Initialize with empty DataFrame
         self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Phase"])
-        self.table_model = TableModel(self.data)
+        self.model = TableModel(self.data)
+        self.model.dataChanged.connect(self.update_plot)
+        self.table.setModel(self.model)
+        # In __init__ after you create self.model
+        self.table_model = self.model
+
+
         self.impedance = None
         self.freqs = np.linspace(1e6, 10e6, 201)
         self.is_dark = False
 
         # GUI build
+        
         self._build_actions()
         self._build_toolbar()
+
         self._build_statusbar()
         self._build_main_layout()
 
@@ -114,22 +132,29 @@ class MainWindow(QMainWindow):
     # UI: actions & toolbar
     # ---------------------------
     def _build_actions(self):
-        self.act_connect = QAction("Connect", self)
+        self.act_connect = QAction(QIcon("icons/connect.png"), "Connect", self)
         self.act_connect.triggered.connect(self.connect_to_instrument)
-        self.act_rescan = QAction("Rescan", self)
+
+        self.act_rescan = QAction(QIcon("icons/rescan.png"), "Rescan", self)
         self.act_rescan.triggered.connect(self.rescan_ports)
-        self.act_start = QAction("Start Logging", self)
+
+        self.act_start = QAction(QIcon("icons/start.png"), "Start Logging", self)
         self.act_start.triggered.connect(self.start_logging_button)
-        self.act_stop = QAction("Stop Logging", self)
+
+        self.act_stop = QAction(QIcon("icons/stop.png"), "Stop Logging", self)
         self.act_stop.triggered.connect(self.stop_logging_button)
-        self.act_export = QAction("Export CSV", self)
+
+        self.act_export = QAction(QIcon("icons/export.png"), "Export CSV", self)
         self.act_export.triggered.connect(self.export_csv)
-        self.act_toggle_theme = QAction("Toggle Dark Mode", self)
+
+        self.act_toggle_theme = QAction(QIcon("icons/theme.png"), "Toggle Dark Mode", self)
         self.act_toggle_theme.triggered.connect(self.toggle_theme)
 
     def _build_toolbar(self):
-        toolbar = QToolBar("Main")
-        toolbar.setIconSize(QSize(16, 16))
+        toolbar = QToolBar("Main Toolbar")
+        toolbar.setIconSize(QSize(24, 24))
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+
         toolbar.addAction(self.act_connect)
         toolbar.addAction(self.act_rescan)
         toolbar.addSeparator()
@@ -137,9 +162,43 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.act_stop)
         toolbar.addSeparator()
         toolbar.addAction(self.act_export)
-        toolbar.addSeparator()
         toolbar.addAction(self.act_toggle_theme)
+
+ 
+        
+            # Toolbar
+        toolbar = QToolBar("Main toolbar")
+        toolbar.setIconSize(QSize(16, 16))
         self.addToolBar(toolbar)
+
+        # Menu
+        menu = self.menuBar()
+        file_menu = menu.addMenu("&File")
+        file_menu.addAction(QAction("New File", self))
+        file_menu.addSeparator()
+        file_menu.addAction(QAction("Open File", self))
+        file_menu.addSeparator()
+        file_menu.addAction(QAction("Save", self))
+        file_menu.addSeparator()
+        file_menu.addAction(QAction("Save As", self))
+        file_menu.addSeparator()
+        file_menu.addAction(QAction("Share as", self))
+        file_menu.addSeparator()
+        file_menu.addAction(QAction("Print", self))
+        file_menu.addSeparator()
+        file_menu.addAction(QAction("Close", self))
+        file_menu.addMenu("Share")
+        edit_menu = menu.addMenu("&Edit")
+        view_menu = menu.addMenu("&View")
+        self.button_action8 = QAction("Add Table", self)
+        view_menu.addAction(self.button_action8)
+        self.button_action8.triggered.connect(self.insert_button_clicked)
+        self.act_toggle_theme = QAction("Toggle Dark Mode", self)
+        self.act_toggle_theme.triggered.connect(self.toggle_theme)
+        edit_menu.addAction(self.act_toggle_theme)
+        self.act_export = QAction("Export CSV", self)
+        self.act_export.triggered.connect(self.export_csv)
+        view_menu.addAction(self.act_export)
 
     def _build_statusbar(self):
         sb = QStatusBar(self)
@@ -213,11 +272,14 @@ class MainWindow(QMainWindow):
         ctl_layout = QHBoxLayout()
         self.btn_start = QPushButton("Start Logging")
         self.btn_stop = QPushButton("Stop Logging")
+        self.upload_button = QPushButton("Upload Data")
         self.btn_stop.setEnabled(False)
         self.btn_start.clicked.connect(self.start_logging_button)
         self.btn_stop.clicked.connect(self.stop_logging_button)
+        self.upload_button.clicked.connect(self.upload_button_clicked)
         ctl_layout.addWidget(self.btn_start)
         ctl_layout.addWidget(self.btn_stop)
+        ctl_layout.addWidget(self.upload_button)
         control_grp.setLayout(ctl_layout)
         left_layout.addWidget(control_grp)
 
@@ -363,6 +425,99 @@ class MainWindow(QMainWindow):
             port_hint = selected
         # spawn background connect to avoid freeze
         threading.Thread(target=self._connect_worker, args=(None if "Auto-detect" in selected else port_hint,), daemon=True).start()
+        
+    def insert_button_clicked(self):
+        """Initializes table with empty rows and shows Insert/Delete buttons."""
+        # Create empty DataFrame
+        self.data = pd.DataFrame({
+            "Timestamp": ["" for _ in range(10)],
+            "Frequency(Hz)": ["" for _ in range(10)],
+            "Resistance(Ω)": ["" for _ in range(10)],
+            "Phase": ["" for _ in range(10)]
+        })
+
+        # Create model and connect to plot
+        self.model = TableModel(self.data)
+        self.model.dataChanged.connect(self.update_plot)
+        self.table.setModel(self.model)
+
+        # Create buttons (make them only once)
+        if not hasattr(self, 'insert_btn'):
+            self.insert_btn = QPushButton("Insert Row")
+            self.insert_btn.clicked.connect(self.insert_row)
+            self.delete_btn = QPushButton("Delete Row")
+            self.delete_btn.clicked.connect(self.delete_row)
+
+            # Add buttons to layout
+            btn_layout = QHBoxLayout()
+            btn_layout.addWidget(self.insert_btn)
+            btn_layout.addWidget(self.delete_btn)
+
+            # Assuming you have a main layout container
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.addLayout(btn_layout)
+            layout.addWidget(self.table)
+            self.setCentralWidget(container)
+
+    def insert_row(self):
+        """Insert a new blank row at the selected position or at the end."""
+        new_row = pd.DataFrame({
+            "Timestamp": [""],
+            "Frequency(Hz)": [""],
+            "Resistance(Ω)": [""],
+            "Phase": [""]
+        })
+        curr_row = self.table.currentIndex().row()
+        if curr_row == -1:
+            self.data = pd.concat([self.data, new_row], ignore_index=True)
+        else:
+            top = self.data.iloc[:curr_row + 1]
+            bottom = self.data.iloc[curr_row + 1:]
+            self.data = pd.concat([top, new_row, bottom], ignore_index=True)
+
+        # Refresh model
+        self.model = TableModel(self.data)
+        self.model.dataChanged.connect(self.update_plot)
+        self.table.setModel(self.model)
+
+    def delete_row(self):
+        """Delete the currently selected row."""
+        curr_row = self.table.currentIndex().row()
+        if curr_row < 0:
+            QMessageBox.warning(self, "Warning", "Please select a row to delete")
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Deletion",
+            "Are you sure you want to delete this row?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if confirm == QMessageBox.StandardButton.Yes:
+            self.data = self.data.drop(index=curr_row).reset_index(drop=True)
+            self.model = TableModel(self.data)
+            self.model.dataChanged.connect(self.update_plot)
+            self.table.setModel(self.model)
+
+    def upload_button_clicked(self):
+        """Load CSV or Excel file into the table."""
+        file, _ = QFileDialog.getOpenFileName(
+            self, "Select File", "", "CSV (*.csv);;Excel (*.xlsx)"
+        )
+        if not file:
+            return
+        try:
+            self.data = pd.read_csv(file) if file.endswith(".csv") else pd.read_excel(file)
+            for col in ["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Phase"]:
+                if col not in self.data.columns:
+                    self.data[col] = ""
+            self.model = TableModel(self.data)
+            self.model.dataChanged.connect(self.update_plot)
+            self.table.setModel(self.model)
+            self.update_plot()
+        except Exception as e:
+            QMessageBox.warning(self, "File Error", str(e))
 
     # ---------------------------
     # Data handling (thread-safe)
@@ -388,6 +543,7 @@ class MainWindow(QMainWindow):
                     self.data = pd.concat([self.data, new_df], ignore_index=True)
                     # update table model
                     self.table_model.set_dataframe(self.data)
+                    self.table.setModel(self.table_model)
                     self.table_view.resizeColumnsToContents()
                     # update plot
                     self.update_plot()
@@ -548,7 +704,7 @@ class MainWindow(QMainWindow):
             if not fname:
                 return
             self.data.to_csv(fname, index=False)
-            self.statusBar().showMessage(f"Saved {len(self.data)} rows to {fname}", 6000)
+            self.statusBar().showMessage(f"Saved {len(self.data)} rows to {fname}", 100000)
         except Exception as e:
             QMessageBox.warning(self, "Export Error", str(e))
 
@@ -575,10 +731,6 @@ class MainWindow(QMainWindow):
     # ---------------------------
     def sauerbrey_konazawa(self):
         """Open Sauerbrey & Konazawa dialog (simple implementation)."""
-        if not MODELS_AVAILABLE:
-            QMessageBox.information(self, "Models Missing", "Sauerbrey/Konazawa models not found in Models/ — ensure they're available.")
-            return
-
         dlg = QWidget()
         dlg.setWindowTitle("Sauerbrey & Konazawa")
         dlg.resize(700, 480)
