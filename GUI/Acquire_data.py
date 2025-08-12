@@ -42,17 +42,12 @@ class NanoVNA:
         self.error_count = 0
         self.max_errors = 10
         self.last_successful_scan = None
-        self.notify_callback = notify_callback  # gui provided callable
+        self.notify_callback = notify_callback
         self.acquisition_thread: Optional[threading.Thread] = None
 
-    # -------------------------
-    # internal notify helper
-    # -------------------------
     def _notify(self, level: str, title: str, msg: str):
-        """Send messages to GUI or fallback to logging."""
         try:
             if callable(self.notify_callback):
-                # GUI should ensure this is run on main thread if needed
                 self.notify_callback(level, title, msg)
             else:
                 if level == "info":
@@ -64,19 +59,14 @@ class NanoVNA:
                 else:
                     logger.debug(f"{title}: {msg}")
         except Exception:
-            # ensure notify never raises
             logger.exception("Error while calling notify_callback")
 
-    # -------------------------
-    # port auto-detection
-    # -------------------------
     def _auto_detect_port(self) -> Optional[str]:
         ports = list(serial.tools.list_ports.comports())
         if not ports:
             self._notify("warning", "Auto-detect", "No serial ports found")
             return None
 
-        # prefer ports with likely NanoVNA descriptors
         keywords = ("nano", "vna", "ch340", "ch341", "usb-serial")
         for p in ports:
             desc = (p.description or "").lower()
@@ -84,15 +74,11 @@ class NanoVNA:
                 self._notify("info", "Auto-detect", f"Auto-detected port {p.device} ({p.description})")
                 return p.device
 
-        # fallback to first port
         self._notify("info", "Auto-detect", f"No NanoVNA hint found, using first port {ports[0].device}")
         return ports[0].device
 
-    # -------------------------
-    # connect / disconnect
-    # -------------------------
     def connect(self, retries: int = 3) -> bool:
-        """Attempt a serial connection and verify device by sending 'ver'."""
+        """Attempt a serial connection and verify device by sending 'info' or 'ver'."""
         if self.is_connected:
             return True
 
@@ -104,7 +90,6 @@ class NanoVNA:
 
         for attempt in range(1, retries + 1):
             try:
-                # close previous connection if any
                 if self.ser and getattr(self.ser, "is_open", False):
                     try:
                         self.ser.close()
@@ -116,24 +101,38 @@ class NanoVNA:
                 self.ser = serial.Serial(self.port, self.baudrate, timeout=self.timeout, write_timeout=self.timeout)
                 time.sleep(0.5)
 
-                # flush buffers
                 try:
                     self.ser.reset_input_buffer()
                     self.ser.reset_output_buffer()
                 except Exception:
                     pass
 
-                # test with version command
-                self._send_command("ver")
-                response = self._read_line(timeout=2.0)
+                # ---- Try 'info' first ----
+                self._send_command("info")
+                time.sleep(0.05)
+                lines = []
+                while True:
+                    line = self._read_line(timeout=0.5)
+                    if not line:
+                        break
+                    lines.append(line)
+                response = "\n".join(lines)
 
+                # ---- If 'info' fails, try 'ver' ----
+                if not response.strip():
+                    self._send_command("ver")
+                    time.sleep(0.05)
+                    line = self._read_line(timeout=2.0)
+                    if line:
+                        response = line
+
+                # ---- Accept if 'nano' appears anywhere ----
                 if response and "nano" in response.lower():
                     self.is_connected = True
                     self.error_count = 0
                     self._notify("info", "Connect", f"Connected: {response.strip()}")
                     return True
                 else:
-                    # not a fatal error, try again
                     self._notify("warning", "Connect", f"Unexpected response: {response}")
                     try:
                         self.ser.close()
@@ -150,13 +149,11 @@ class NanoVNA:
                     pass
                 time.sleep(0.5)
 
-        # final failure
         self.is_connected = False
         self._notify("critical", "Connect", "Unable to connect to NanoVNA after retries")
         return False
 
     def disconnect(self):
-        """Stop acquisition and close serial port."""
         try:
             self.stop_acquisition()
             if self.ser:
@@ -169,9 +166,6 @@ class NanoVNA:
         except Exception as e:
             self._notify("warning", "Disconnect", f"Error during disconnect: {e}")
 
-    # -------------------------
-    # low-level serial helpers
-    # -------------------------
     def _send_command(self, cmd: str):
         if not self.ser or not getattr(self.ser, "is_open", False):
             raise Exception("Serial device not open")
@@ -203,63 +197,43 @@ class NanoVNA:
             line = self._read_line(timeout=0.5)
             if not line:
                 continue
-            # some firmwares might send the marker in different case
             if line.strip().lower() == end_marker.lower():
                 break
             lines.append(line.strip())
         return lines
 
-    # -------------------------
-    # scanning
-    # -------------------------
     def scan(self, start_freq: float, stop_freq: float, points: int) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Performs a single scan.
-        start_freq, stop_freq in Hz; points is integer.
-        Returns (freqs (Hz np.array), s11 (complex np.array))
-        """
         if not self.is_connected or not self.ser or not getattr(self.ser, "is_open", False):
             raise Exception("Device not connected")
 
-        # NanoVNA firmware often expects sweep command in kHz
         start_khz = int(start_freq / 1e3)
         stop_khz = int(stop_freq / 1e3)
         self._notify("info", "Scan", f"Starting scan {start_khz}kHz - {stop_khz}kHz, {points} pts")
 
-        # request sweep update (firmware dependent - this is a common ASCII command)
         self._send_command(f"sweep {start_khz} {stop_khz} {points}")
         time.sleep(0.05)
 
-        # request frequencies
         self._send_command("frequencies")
         freq_lines = self._read_lines_until(end_marker="ch0", timeout=8.0)
-
         freqs = []
         for line in freq_lines:
             try:
-                # some firmwares return kHz
                 value = float(line)
-                # detect if already in Hz or in kHz by magnitude
-                if value > 1e6:  # likely Hz already
+                if value > 1e6:
                     freqs.append(value)
                 else:
                     freqs.append(value * 1e3)
             except ValueError:
-                # skip non-numeric lines
                 continue
-
         if not freqs:
             raise Exception("No frequencies received from device")
 
-        # request S11 (channel 0)
         self._send_command("data 0")
         data_lines = self._read_lines_until(end_marker="ch0", timeout=8.0)
-
         s11 = []
         for line in data_lines:
             if not line:
                 continue
-            # expected format: "real,imag"
             if "," in line:
                 try:
                     real_s, imag_s = line.split(",", 1)
@@ -267,18 +241,15 @@ class NanoVNA:
                 except ValueError:
                     continue
             else:
-                # sometimes whitespace-separated or other format: try splitting
                 parts = line.split()
                 if len(parts) >= 2:
                     try:
                         s11.append(complex(float(parts[0]), float(parts[1])))
                     except ValueError:
                         continue
-
         if not s11:
             raise Exception("No S11 data received from device")
 
-        # ensure lengths match
         min_len = min(len(freqs), len(s11))
         freqs_arr = np.array(freqs[:min_len], dtype=float)
         s11_arr = np.array(s11[:min_len], dtype=complex)
@@ -294,26 +265,15 @@ class NanoVNA:
         small = np.abs(denom) < 1e-15
         denom[small] = 1e-15 + 0j
         Z = self.Z0 * (1.0 + s11) / denom
-        # numeric safety
         Z = np.where(np.abs(Z) > 1e6, 1e6 + 0j, Z)
         Z = np.where(np.abs(Z) < 1e-12, 1e-12 + 0j, Z)
         return Z
 
-    # -------------------------
-    # continuous acquisition
-    # -------------------------
     def start_acquisition(self, start_freq: float, stop_freq: float, points: int,
                           interval: float = 2.0, callback: Optional[Callable] = None) -> bool:
-        """
-        Start continuous acquisition in a background thread.
-
-        callback(data_package) will be invoked for each scan in the acquisition thread.
-        The data_package is a dict containing frequencies, impedance, etc.
-        """
         if self.acquisition_active:
             self._notify("warning", "Acquisition", "Acquisition already active")
             return False
-
         if not self.is_connected:
             self._notify("critical", "Acquisition", "Device not connected")
             return False
@@ -347,7 +307,6 @@ class NanoVNA:
                         "acquisition_time": elapsed
                     }
 
-                    # push non-blocking into queue
                     try:
                         self.data_queue.put_nowait(data_package)
                     except queue.Full:
@@ -358,17 +317,14 @@ class NanoVNA:
                         try:
                             self.data_queue.put_nowait(data_package)
                         except queue.Full:
-                            # give up on this sample
                             pass
 
-                    # call provided callback (note: callback will run in worker thread)
                     if callable(callback):
                         try:
                             callback(data_package)
                         except Exception:
                             self._notify("warning", "Callback", "Callback raised an exception")
 
-                    # sleep to respect interval
                     remaining = max(0.0, interval - (time.time() - start_time))
                     if remaining > 0:
                         time.sleep(remaining)
@@ -379,7 +335,6 @@ class NanoVNA:
                     if self.error_count >= self.max_errors:
                         self._notify("critical", "Acquisition", "Max errors reached, stopping acquisition")
                         break
-                    # short backoff
                     time.sleep(min(1.0, interval))
 
             self.acquisition_active = False
@@ -394,36 +349,23 @@ class NanoVNA:
         if self.acquisition_active:
             self._notify("info", "Acquisition", "Stopping acquisition")
             self.acquisition_active = False
-            # join thread briefly (non-blocking if GUI)
             if self.acquisition_thread and self.acquisition_thread.is_alive():
                 self.acquisition_thread.join(timeout=2.0)
             self._notify("info", "Acquisition", "Acquisition stopped")
 
-    # -------------------------
-    # legacy convenience function
-    # -------------------------
-def acquire_data(device_or_port, start_freq=1e6, stop_freq=10e6, points=201):
-    """
-    Backward-compatible helper.
-    Accepts either a port string or a NanoVNA instance.
-    Returns: freqs, resistance, impedance, reactance, phase, time_array
-    """
-    if isinstance(device_or_port, str):
-        vna = NanoVNA(port=device_or_port)
-        try:
-            if not vna.connect():
-                raise Exception("Failed to connect")
-            freqs, s11 = vna.scan(start_freq, stop_freq, points)
-            impedance = vna.s11_to_impedance(s11)
-        finally:
-            vna.disconnect()
-    else:
-        vna = device_or_port
-        freqs, s11 = vna.scan(start_freq, stop_freq, points)
-        impedance = vna.s11_to_impedance(s11)
 
+def acquire_data(device_or_port, start_freq=1e6, stop_freq=10e6, points=201):
+    if isinstance(device_or_port, NanoVNA):
+        vna = device_or_port
+    else:
+        vna = NanoVNA(port=device_or_port)
+        if not vna.connect():
+            raise RuntimeError("Could not connect to NanoVNA")
+    freqs, s11 = vna.scan(start_freq, stop_freq, points)
+    impedance = vna.s11_to_impedance(s11)
     resistance = impedance.real
     reactance = impedance.imag
     phase = np.angle(impedance, deg=True)
-    time_array = np.linspace(0, 1, len(freqs))
+    magnitude = np.abs(impedance)
+    time_array = np.linspace(0, len(freqs) - 1, len(freqs))
     return freqs, resistance, impedance, reactance, phase, time_array

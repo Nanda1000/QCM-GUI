@@ -347,7 +347,7 @@ class UnifiedNanoVNA:
             for p in ports_to_try:
                 try:
                     impl = ASCII_NanoVNA(port=p, baudrate=self.baudrate, timeout=self.timeout,
-                                         notify_callback=self.notify_callback)
+                                        notify_callback=self.notify_callback)
                     ok = impl.connect(retries=1)
                     if ok:
                         self._impl = impl
@@ -356,6 +356,7 @@ class UnifiedNanoVNA:
                         return True
                 except Exception:
                     continue
+
 
         # Probe each serial port and attempt to classify + instantiate a model-specific class
         probes = scan_serial_ports_for_vna()

@@ -404,7 +404,8 @@ class MainWindow(QMainWindow):
         try:
             # create NanoVNA instance if not present
             if self.vna is None:
-                self.vna = NanoVNA(port=port_hint, notify_callback=self.notify_callback)
+                self.vna = NanoVNA(port=port_hint, notify_callback=self.notify_callback, prefer_ascii_first=False)
+
 
             ok = self.vna.connect()
             if not ok:
