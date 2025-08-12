@@ -11,6 +11,9 @@ from datetime import datetime
 from functools import partial
 from typing import Optional
 from Acquire_data import NanoVNA
+from nanovna import NanoVNA
+from Acquire_unified import UnifiedNanoVNA as NanoVNA
+
 
 
 
