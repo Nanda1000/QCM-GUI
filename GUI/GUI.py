@@ -88,22 +88,11 @@ class MainWindow(QMainWindow):
         # state / models
         self.vna: Optional[NanoVNA] = None
 
-        # Create table immediately
-        self.table = QTableView()
-        self.setCentralWidget(self.table)
-
-        # Initialize with empty DataFrame
-        self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Phase"])
-        self.model = TableModel(self.data)
-        self.model.dataChanged.connect(self.update_plot)
-        self.table.setModel(self.model)
-        # In __init__ after you create self.model
-        self.table_model = self.model
-
-
         self.impedance = None
         self.freqs = np.linspace(1e6, 10e6, 201)
         self.is_dark = False
+        
+
 
         # GUI build
         
@@ -309,8 +298,13 @@ class MainWindow(QMainWindow):
         table_frame = QFrame()
         table_layout = QVBoxLayout(table_frame)
         table_layout.setContentsMargins(4, 4, 4, 4)
+
         self.table_view = QTableView()
+        self.data = pd.DataFrame(columns=["Time", "Frequency(Hz)", "Resistance(Ω)", "Phase"])
+        self.table_model = TableModel(self.data)
+        self.table_model.dataChanged.connect(self.update_plot)
         self.table_view.setModel(self.table_model)
+
         self.table_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         table_layout.addWidget(QLabel("Data Table"))
         table_layout.addWidget(self.table_view)
@@ -441,24 +435,22 @@ class MainWindow(QMainWindow):
         self.model.dataChanged.connect(self.update_plot)
         self.table.setModel(self.model)
 
-        # Create buttons (make them only once)
+        # Create buttons only once
         if not hasattr(self, 'insert_btn'):
             self.insert_btn = QPushButton("Insert Row")
             self.insert_btn.clicked.connect(self.insert_row)
             self.delete_btn = QPushButton("Delete Row")
             self.delete_btn.clicked.connect(self.delete_row)
 
-            # Add buttons to layout
+            # Add buttons below existing table in the right-side layout
             btn_layout = QHBoxLayout()
             btn_layout.addWidget(self.insert_btn)
             btn_layout.addWidget(self.delete_btn)
 
-            # Assuming you have a main layout container
-            container = QWidget()
-            layout = QVBoxLayout(container)
-            layout.addLayout(btn_layout)
-            layout.addWidget(self.table)
-            self.setCentralWidget(container)
+            # self.table is inside the table_frame from _build_main_layout()
+            parent_layout = self.table.parentWidget().layout()
+            parent_layout.addLayout(btn_layout)
+
 
     def insert_row(self):
         """Insert a new blank row at the selected position or at the end."""
