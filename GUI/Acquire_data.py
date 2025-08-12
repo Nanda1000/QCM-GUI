@@ -108,15 +108,19 @@ class NanoVNA:
                     pass
 
                 # ---- Try 'info' first ----
+                # Send 'info' first for H4 compatibility
                 self._send_command("info")
                 time.sleep(0.05)
+
+                # Give it up to 1 second to respond fully
                 lines = []
-                while True:
-                    line = self._read_line(timeout=0.5)
-                    if not line:
-                        break
-                    lines.append(line)
+                start_time = time.time()
+                while time.time() - start_time < 1.0:  # collect for 1 second
+                    line = self._read_line(timeout=0.2)
+                    if line:
+                        lines.append(line)
                 response = "\n".join(lines)
+
 
                 # ---- If 'info' fails, try 'ver' ----
                 if not response.strip():
