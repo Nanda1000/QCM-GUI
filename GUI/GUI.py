@@ -11,7 +11,6 @@ from datetime import datetime
 from functools import partial
 from typing import Optional
 from Acquire_data import NanoVNA
-from nanovna import NanoVNA
 from Acquire_unified import UnifiedNanoVNA as NanoVNA
 
 
@@ -52,7 +51,7 @@ class TableModel(QAbstractTableModel):
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None
-        if role == Qt.ItemDataRole.DisplayRole:
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             value = self._data.iat[index.row(), index.column()]
             if pd.isna(value):
                 return ""
@@ -67,7 +66,26 @@ class TableModel(QAbstractTableModel):
         return str(section)
 
     def flags(self, index):
-        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable
+
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
+        if not index.isValid() or role != Qt.ItemDataRole.EditRole:
+            return False
+        col = self._data.columns[index.column()]
+        # convert empty string to NA
+        if value == "":
+            val = pd.NA
+        else:
+            # try to coerce numeric when appropriate
+            try:
+                # if column dtype is numeric or value looks numeric, convert
+                val = float(value)
+            except Exception:
+                val = value
+        self._data.iat[index.row(), index.column()] = val
+        # notify views
+        self.dataChanged.emit(index, index)
+        return True
 
     def set_dataframe(self, df: pd.DataFrame):
         self.beginResetModel()
@@ -303,7 +321,7 @@ class MainWindow(QMainWindow):
         table_layout.setContentsMargins(4, 4, 4, 4)
 
         self.table_view = QTableView()
-        self.data = pd.DataFrame(columns=["Time", "Frequency(Hz)", "Resistance(Ω)", "Phase"])
+        self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Phase"])
         self.table_model = TableModel(self.data)
         self.table_model.dataChanged.connect(self.update_plot)
         self.table_view.setModel(self.table_model)
@@ -311,6 +329,16 @@ class MainWindow(QMainWindow):
         self.table_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         table_layout.addWidget(QLabel("Data Table"))
         table_layout.addWidget(self.table_view)
+        # Add Insert/Delete buttons
+        btn_layout = QHBoxLayout()
+        self.insert_btn = QPushButton("Insert Row")
+        self.insert_btn.clicked.connect(self.insert_row)
+        self.delete_btn = QPushButton("Delete Row")
+        self.delete_btn.clicked.connect(self.delete_row)
+        btn_layout.addWidget(self.insert_btn)
+        btn_layout.addWidget(self.delete_btn)
+        table_layout.addLayout(btn_layout)
+
         right_splitter.addWidget(table_frame)
 
         # Plot
@@ -424,61 +452,48 @@ class MainWindow(QMainWindow):
         threading.Thread(target=self._connect_worker, args=(None if "Auto-detect" in selected else port_hint,), daemon=True).start()
         
     def insert_button_clicked(self):
-        """Initializes table with empty rows and shows Insert/Delete buttons."""
-        # Create empty DataFrame
+        """Initialises table with empty rows and uses the correct table_view/model names."""
+        # Create empty DataFrame with the same column names used elsewhere
         self.data = pd.DataFrame({
-            "Timestamp": ["" for _ in range(10)],
-            "Frequency(Hz)": ["" for _ in range(10)],
-            "Resistance(Ω)": ["" for _ in range(10)],
-            "Phase": ["" for _ in range(10)]
+            "Timestamp": [pd.NaT for _ in range(10)],
+            "Frequency(Hz)": [np.nan for _ in range(10)],
+            "Resistance(Ω)": [np.nan for _ in range(10)],
+            "Phase": [np.nan for _ in range(10)]
         })
 
-        # Create model and connect to plot
-        self.model = TableModel(self.data)
-        self.model.dataChanged.connect(self.update_plot)
-        self.table.setModel(self.model)
-
-        # Create buttons only once
-        if not hasattr(self, 'insert_btn'):
-            self.insert_btn = QPushButton("Insert Row")
-            self.insert_btn.clicked.connect(self.insert_row)
-            self.delete_btn = QPushButton("Delete Row")
-            self.delete_btn.clicked.connect(self.delete_row)
-
-            # Add buttons below existing table in the right-side layout
-            btn_layout = QHBoxLayout()
-            btn_layout.addWidget(self.insert_btn)
-            btn_layout.addWidget(self.delete_btn)
-
-            # self.table is inside the table_frame from _build_main_layout()
-            parent_layout = self.table.parentWidget().layout()
-            parent_layout.addLayout(btn_layout)
+        # Create model and set it on the actual table view
+        self.table_model = TableModel(self.data)
+        self.table_model.dataChanged.connect(self.update_plot)
+        self.table_view.setModel(self.table_model)
+        self.table_view.resizeColumnsToContents()
+        self.update_plot()
 
 
     def insert_row(self):
         """Insert a new blank row at the selected position or at the end."""
         new_row = pd.DataFrame({
-            "Timestamp": [""],
-            "Frequency(Hz)": [""],
-            "Resistance(Ω)": [""],
-            "Phase": [""]
+            "Timestamp": [pd.Timestamp.now()],
+            "Frequency(Hz)": [np.nan],
+            "Resistance(Ω)": [np.nan],
+            "Phase": [np.nan]
         })
-        curr_row = self.table.currentIndex().row()
-        if curr_row == -1:
+        curr_row = self.table_view.currentIndex().row()
+        if curr_row == -1 or curr_row >= self.data.shape[0]:
             self.data = pd.concat([self.data, new_row], ignore_index=True)
         else:
             top = self.data.iloc[:curr_row + 1]
             bottom = self.data.iloc[curr_row + 1:]
             self.data = pd.concat([top, new_row, bottom], ignore_index=True)
 
-        # Refresh model
-        self.model = TableModel(self.data)
-        self.model.dataChanged.connect(self.update_plot)
-        self.table.setModel(self.model)
+        # update model in-place
+        self.table_model.set_dataframe(self.data)
+        self.table_view.resizeColumnsToContents()
+        self.update_plot()
+
 
     def delete_row(self):
         """Delete the currently selected row."""
-        curr_row = self.table.currentIndex().row()
+        curr_row = self.table_view.currentIndex().row()
         if curr_row < 0:
             QMessageBox.warning(self, "Warning", "Please select a row to delete")
             return
@@ -491,9 +506,10 @@ class MainWindow(QMainWindow):
         )
         if confirm == QMessageBox.StandardButton.Yes:
             self.data = self.data.drop(index=curr_row).reset_index(drop=True)
-            self.model = TableModel(self.data)
-            self.model.dataChanged.connect(self.update_plot)
-            self.table.setModel(self.model)
+            self.table_model.set_dataframe(self.data)
+            self.table_view.resizeColumnsToContents()
+            self.update_plot()
+
 
     def upload_button_clicked(self):
         """Load CSV or Excel file into the table."""
