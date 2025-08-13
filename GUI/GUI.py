@@ -1,5 +1,3 @@
-
-        
 import sys
 import os
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -11,16 +9,12 @@ from datetime import datetime
 from functools import partial
 from typing import Optional
 from Acquire_data import NanoVNA
-from Acquire_unified import UnifiedNanoVNA as NanoVNA
-
-
-
-
+import serial.tools.list_ports
 import pyqtgraph as pg
 import numpy as np
 import pandas as pd
 
-from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex
+from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex, pyqtSignal, QObject
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (
     QFileDialog, QGroupBox, QSplitter, QWidget, QTableView, QLineEdit, QToolBar,
@@ -32,6 +26,14 @@ from Models.Avrami import compute_X_t, fit as avrami_fit, formula as avrami_form
 from Models.Sauerbrey import sauerbrey
 from Models.konazawa import konazawa
 
+
+# ---------------------------
+# Signal handler for thread-safe communication
+# ---------------------------
+class DataSignalHandler(QObject):
+    data_received = pyqtSignal(dict)
+    error_occurred = pyqtSignal(str, str)
+    status_update = pyqtSignal(str)
 
 
 # ---------------------------
@@ -108,18 +110,23 @@ class MainWindow(QMainWindow):
 
         # state / models
         self.vna: Optional[NanoVNA] = None
+        self.acquisition_thread: Optional[threading.Thread] = None
+        self.acquisition_active = False
+        self.acquisition_stop_flag = threading.Event()
 
         self.impedance = None
         self.freqs = np.linspace(1e6, 10e6, 201)
         self.is_dark = False
         
-
+        # Signal handler for thread-safe communication
+        self.signal_handler = DataSignalHandler()
+        self.signal_handler.data_received.connect(self._on_vna_data)
+        self.signal_handler.error_occurred.connect(self._on_error)
+        self.signal_handler.status_update.connect(self._on_status_update)
 
         # GUI build
-        
         self._build_actions()
         self._build_toolbar()
-
         self._build_statusbar()
         self._build_main_layout()
 
@@ -137,6 +144,15 @@ class MainWindow(QMainWindow):
 
         # initial populate of device list
         QTimer.singleShot(50, self.rescan_ports)
+
+    # ---------------------------
+    # Helper method to check connection status
+    # ---------------------------
+    def _is_vna_connected(self):
+        """Check if VNA is connected by checking serial port status."""
+        return (self.vna is not None and 
+                self.vna.ser is not None and 
+                self.vna.ser.is_open)
 
     # ---------------------------
     # UI: actions & toolbar
@@ -173,13 +189,6 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(self.act_export)
         toolbar.addAction(self.act_toggle_theme)
-
- 
-        
-            # Toolbar
-        toolbar = QToolBar("Main toolbar")
-        toolbar.setIconSize(QSize(16, 16))
-        self.addToolBar(toolbar)
 
         # Menu
         menu = self.menuBar()
@@ -321,7 +330,7 @@ class MainWindow(QMainWindow):
         table_layout.setContentsMargins(4, 4, 4, 4)
 
         self.table_view = QTableView()
-        self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Phase"])
+        self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Magnitude(Ω)", "Phase(°)"])
         self.table_model = TableModel(self.data)
         self.table_model.dataChanged.connect(self.update_plot)
         self.table_view.setModel(self.table_model)
@@ -360,124 +369,338 @@ class MainWindow(QMainWindow):
         main_splitter.setStretchFactor(1, 1)
 
     # ---------------------------
-    # Utilities: safe notifications
+    # Thread-safe signal handlers
     # ---------------------------
-    def _notify(self, level: str, title: str, message: str):
-        """Schedule a messagebox or statusbar text on main thread."""
-        def _show():
-            if level == "info":
-                # short info: status + optional messagebox for explicit info
-                self.statusBar().showMessage(f"{title}: {message}", 8000)
-            elif level == "warning":
-                QMessageBox.warning(self, title, message)
-            elif level == "critical":
-                QMessageBox.critical(self, title, message)
-            else:
-                QMessageBox.information(self, title, message)
-        QTimer.singleShot(0, _show)
+    def _on_vna_data(self, data_package: dict):
+        """Handle data received from NanoVNA in main thread."""
+        try:
+            timestamp = data_package.get("timestamp", pd.Timestamp.now())
+            freqs = data_package.get("frequencies", np.array([]))
+            impedance = data_package.get("impedance", np.array([]))
+            
+            if len(freqs) == 0 or len(impedance) == 0:
+                return
+                
+            resistance = impedance.real
+            reactance = impedance.imag
+            magnitude = np.abs(impedance)
+            phase = np.angle(impedance, deg=True)
+            
+            # Create new rows for the data table
+            rows = []
+            for f, r, x, m, p in zip(freqs, resistance, reactance, magnitude, phase):
+                rows.append({
+                    "Timestamp": timestamp,
+                    "Frequency(Hz)": float(f),
+                    "Resistance(Ω)": float(r),
+                    "Reactance(Ω)": float(x),
+                    "Magnitude(Ω)": float(m),
+                    "Phase(°)": float(p)
+                })
+            
+            if rows:
+                new_df = pd.DataFrame(rows)
+                self.data = pd.concat([self.data, new_df], ignore_index=True)
+                self.table_model.set_dataframe(self.data)
+                self.table_view.resizeColumnsToContents()
+                self.update_plot()
+                
+                scan_count = data_package.get("scan_count", "?")
+                self.statusBar().showMessage(f"Received scan #{scan_count} ({len(freqs)} points)", 3000)
+                
+        except Exception as e:
+            QMessageBox.warning(self, "Data Processing Error", str(e))
 
-    # This callback is passed to NanoVNA to receive messages from worker threads
-    def notify_callback(self, level, title, message):
-        # ensure scheduled on GUI thread
-        self._notify(level, title, message)
+    def _on_error(self, title: str, message: str):
+        """Handle errors from background threads."""
+        QMessageBox.warning(self, title, message)
+
+    def _on_status_update(self, message: str):
+        """Handle status updates from background threads."""
+        self.statusBar().showMessage(message, 5000)
 
     # ---------------------------
     # Device scanning & connect
     # ---------------------------
     def rescan_ports(self):
-        """Populate device combobox. Adds 'NanoVNA (Auto-detect)' entry."""
+        """Populate device combobox with available serial ports."""
         self.combo_ports.clear()
         self.combo_ports.addItem("NanoVNA (Auto-detect)")
-        # try pyvisa devices if available (best-effort)
+        
+        # Add available serial ports - FIXED FORMAT
+        try:
+            ports = list(serial.tools.list_ports.comports())
+            for port in ports:
+                # Store port info in a way that's easy to extract later
+                port_desc = f"{port.device} ({port.description or 'Unknown'})"
+                self.combo_ports.addItem(port_desc)
+        except Exception as e:
+            print(f"Error scanning ports: {e}")
+        
+        # Try pyvisa devices if available (best-effort)
         if self.pyvisa_rm:
             try:
                 res = self.pyvisa_rm.list_resources()
                 for r in res:
                     self.combo_ports.addItem(str(r))
             except Exception:
-                # ignore errors from pyvisa
                 pass
+                
         self.statusBar().showMessage("Device list updated", 3000)
 
-    def _connect_worker(self, port_hint: Optional[str] = None):
-        """Background connect worker — uses NanoVNA.connect and does one quick scan."""
-        try:
-            # create NanoVNA instance if not present
-            if self.vna is None:
-                self.vna = NanoVNA(port=port_hint, notify_callback=self.notify_callback, prefer_ascii_first=False)
-
-
-            ok = self.vna.connect()
-            if not ok:
-                self._notify("critical", "Connect", "Failed to connect to NanoVNA")
-                return
-
-            # do a quick single scan (in thread) to prime data and update GUI via callback
-            try:
-                start = float(self.start_frequency.text() or 1e6)
-                stop = float(self.end_frequency.text() or 10e6)
-                points = int(self.sweep_points.text() or 201)
-            except Exception:
-                start, stop, points = 1e6, 10e6, 201
-
-            try:
-                freqs, s11 = self.vna.scan(start, stop, points)
-                impedance = self.vna.s11_to_impedance(s11)
-                resistance = impedance.real
-                data_package = {
-                    "timestamp": pd.Timestamp.now(),
-                    "scan_count": 0,
-                    "frequencies": freqs,
-                    "impedance": impedance,
-                    "resistance": resistance,
-                    "phase": np.angle(impedance, deg=True),
-                    "s11": s11
-                }
-                # schedule UI update (use same path as acquisition)
-                QTimer.singleShot(0, lambda pkg=data_package: self._on_vna_data(pkg))
-                QTimer.singleShot(0, lambda: self.statusBar().showMessage("Connected to NanoVNA", 5000))
-            except Exception as e:
-                self._notify("warning", "Initial Scan", f"Connected but initial scan failed: {e}")
-
-        except Exception as e:
-            self._notify("critical", "Connect Error", str(e))
-
     def connect_to_instrument(self):
-        """Public slot — triggered from UI. Spawns background thread to connect."""
+        """Connect to the selected NanoVNA device."""
         selected = self.combo_ports.currentText()
-        # if user selected explicit visa resource, pass as hint (NanoVNA handler will auto-detect if None)
-        port_hint = None
-        if selected and selected.strip() and "NanoVNA" not in selected:
-            port_hint = selected
-        # spawn background connect to avoid freeze
-        threading.Thread(target=self._connect_worker, args=(None if "Auto-detect" in selected else port_hint,), daemon=True).start()
         
+        # Extract port from selection
+        port = None
+        if selected and "Auto-detect" not in selected:
+            # Extract port device name from "COM3 (Description)" format
+            if "(" in selected and selected.count("(") == 1:
+                port = selected.split("(")[0].strip()
+            else:
+                # If no parentheses, assume the whole string is the port
+                port = selected.strip()
+        
+        def connect_worker():
+            try:
+                if port is None:
+                    # Auto-detect mode - scan available ports and test each one
+                    self.signal_handler.status_update.emit("Auto-detecting NanoVNA...")
+                    ports = list(serial.tools.list_ports.comports())
+                    
+                    connected = False
+                    for port_info in ports:
+                        test_port = port_info.device
+                        self.signal_handler.status_update.emit(f"Testing {test_port}...")
+                        
+                        try:
+                            # Create NanoVNA instance with specific port
+                            test_vna = NanoVNA(port=test_port)
+                            if test_vna.test_connection(test_port):
+                                # Found a working connection
+                                self.vna = test_vna
+                                self.vna.port = test_port
+                                if self.vna.connect():
+                                    self.signal_handler.status_update.emit(f"Connected to NanoVNA on {test_port}")
+                                    connected = True
+                                    break
+                        except Exception:
+                            continue  # Try next port
+                    
+                    if not connected:
+                        self.signal_handler.error_occurred.emit("Auto-detect Failed", "No NanoVNA found on any port")
+                        return
+                else:
+                    # Specific port selected
+                    self.signal_handler.status_update.emit(f"Connecting to {port}...")
+                    self.vna = NanoVNA(port=port)
+                    
+                    if not self.vna.connect():
+                        self.signal_handler.error_occurred.emit("Connection Failed", f"Could not connect to NanoVNA on {port}")
+                        return
+                    
+                    self.signal_handler.status_update.emit(f"Connected to NanoVNA on {port}")
+                
+                # Test connection with initial sweep
+                try:
+                    start = float(self.start_frequency.text() or "1000000")
+                    stop = float(self.end_frequency.text() or "10000000") 
+                    points = int(self.sweep_points.text() or "201")
+                    
+                    if self.vna.sweep(start, stop, points):
+                        result = self.vna.acquire()
+                        
+                        if result[0] is not None:
+                            freqs, s11_values, impedances, resistance, reactance, magnitude, phase = result
+                            
+                            data_package = {
+                                "timestamp": pd.Timestamp.now(),
+                                "scan_count": 0,
+                                "frequencies": freqs,
+                                "impedance": impedances
+                            }
+                            self.signal_handler.data_received.emit(data_package)
+                            self.signal_handler.status_update.emit("Initial sweep completed successfully")
+                        else:
+                            self.signal_handler.error_occurred.emit("Connection Warning", "Connected but no data received")
+                    else:
+                        self.signal_handler.error_occurred.emit("Sweep Failed", "Could not set up initial sweep")
+                        
+                except Exception as e:
+                    self.signal_handler.error_occurred.emit("Initial Sweep Failed", str(e))
+                    
+            except Exception as e:
+                self.signal_handler.error_occurred.emit("Connection Error", str(e))
+        
+        # Run connection in background thread
+        threading.Thread(target=connect_worker, daemon=True).start()
+        self.statusBar().showMessage("Connecting to NanoVNA...", 2000)
+    # ---------------------------
+    # Data acquisition
+    # ---------------------------
+    def run_single_sweep(self):
+        """Perform a single sweep measurement."""
+        if not self._is_vna_connected():
+            QMessageBox.warning(self, "Connection Error", "Please connect to NanoVNA first")
+            return
+        
+        def sweep_worker():
+            try:
+                start = float(self.start_frequency.text() or "1000000")
+                stop = float(self.end_frequency.text() or "10000000")
+                points = int(self.sweep_points.text() or "201")
+                
+                # Perform sweep and acquire data
+                if self.vna.sweep(start, stop, points):
+                    result = self.vna.acquire()
+                    
+                    if result[0] is not None:  # Check if frequencies are available
+                        freqs, s11_values, impedances, resistance, reactance, magnitude, phase = result
+                        
+                        data_package = {
+                            "timestamp": pd.Timestamp.now(),
+                            "scan_count": 1,
+                            "frequencies": freqs,
+                            "impedance": impedances
+                        }
+                        self.signal_handler.data_received.emit(data_package)
+                    else:
+                        self.signal_handler.error_occurred.emit("Sweep Error", "No data received from sweep")
+                else:
+                    self.signal_handler.error_occurred.emit("Sweep Error", "Failed to set up sweep")
+                    
+            except Exception as e:
+                self.signal_handler.error_occurred.emit("Sweep Error", str(e))
+        
+        threading.Thread(target=sweep_worker, daemon=True).start()
+        self.statusBar().showMessage("Performing single sweep...", 2000)
+
+    def start_logging_button(self):
+        """Start continuous data logging."""
+        if not self._is_vna_connected():
+            QMessageBox.warning(self, "Connection Error", "Please connect to NanoVNA first")
+            return
+        
+        if self.acquisition_active:
+            return
+        
+        try:
+            start = float(self.start_frequency.text() or "1000000")
+            stop = float(self.end_frequency.text() or "10000000")
+            points = int(self.sweep_points.text() or "201")
+        except ValueError:
+            QMessageBox.warning(self, "Input Error", "Invalid sweep parameters")
+            return
+        
+        # Start acquisition thread
+        self.acquisition_active = True
+        self.acquisition_stop_flag.clear()
+        self.acquisition_thread = threading.Thread(
+            target=self._acquisition_worker, 
+            args=(start, stop, points), 
+            daemon=True
+        )
+        self.acquisition_thread.start()
+        
+        # Update UI
+        self.btn_start.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+        self.act_start.setEnabled(False)
+        self.act_stop.setEnabled(True)
+        
+        self.statusBar().showMessage("Continuous logging started", 3000)
+
+    def _acquisition_worker(self, start_freq, stop_freq, points):
+        """Background worker for continuous data acquisition."""
+        scan_count = 0
+        interval = 2.0  # seconds between scans
+        
+        while self.acquisition_active and not self.acquisition_stop_flag.is_set():
+            try:
+                # Perform sweep and acquire data
+                if self.vna.sweep(start_freq, stop_freq, points):
+                    result = self.vna.acquire()
+                    
+                    if result[0] is not None:  # Check if frequencies are available
+                        freqs, s11_values, impedances, resistance, reactance, magnitude, phase = result
+                        scan_count += 1
+                        
+                        data_package = {
+                            "timestamp": pd.Timestamp.now(),
+                            "scan_count": scan_count,
+                            "frequencies": freqs,
+                            "impedance": impedances
+                        }
+                        self.signal_handler.data_received.emit(data_package)
+                    else:
+                        self.signal_handler.error_occurred.emit("Acquisition Error", "No data received from sweep")
+                else:
+                    self.signal_handler.error_occurred.emit("Acquisition Error", "Failed to set up sweep")
+                
+                # Wait for next scan or check stop flag
+                for _ in range(int(interval * 10)):  # Check stop flag every 0.1 seconds
+                    if self.acquisition_stop_flag.is_set():
+                        break
+                    time.sleep(0.1)
+                    
+            except Exception as e:
+                self.signal_handler.error_occurred.emit("Acquisition Error", str(e))
+                break
+        
+        self.acquisition_active = False
+
+    def stop_logging_button(self):
+        """Stop continuous data logging."""
+        if not self.acquisition_active:
+            return
+        
+        self.acquisition_active = False
+        self.acquisition_stop_flag.set()
+        
+        # Wait for thread to finish (with timeout)
+        if self.acquisition_thread and self.acquisition_thread.is_alive():
+            self.acquisition_thread.join(timeout=2.0)
+        
+        # Update UI
+        self.btn_start.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.act_start.setEnabled(True)
+        self.act_stop.setEnabled(False)
+        
+        self.statusBar().showMessage("Logging stopped", 3000)
+
+    # ---------------------------
+    # Table management
+    # ---------------------------
     def insert_button_clicked(self):
-        """Initialises table with empty rows and uses the correct table_view/model names."""
-        # Create empty DataFrame with the same column names used elsewhere
+        """Initialize table with empty rows."""
         self.data = pd.DataFrame({
             "Timestamp": [pd.NaT for _ in range(10)],
             "Frequency(Hz)": [np.nan for _ in range(10)],
             "Resistance(Ω)": [np.nan for _ in range(10)],
-            "Phase": [np.nan for _ in range(10)]
+            "Reactance(Ω)": [np.nan for _ in range(10)],
+            "Magnitude(Ω)": [np.nan for _ in range(10)],
+            "Phase(°)": [np.nan for _ in range(10)]
         })
-
-        # Create model and set it on the actual table view
+        
         self.table_model = TableModel(self.data)
         self.table_model.dataChanged.connect(self.update_plot)
         self.table_view.setModel(self.table_model)
         self.table_view.resizeColumnsToContents()
         self.update_plot()
 
-
     def insert_row(self):
-        """Insert a new blank row at the selected position or at the end."""
+        """Insert a new blank row."""
         new_row = pd.DataFrame({
             "Timestamp": [pd.Timestamp.now()],
             "Frequency(Hz)": [np.nan],
             "Resistance(Ω)": [np.nan],
-            "Phase": [np.nan]
+            "Reactance(Ω)": [np.nan],
+            "Magnitude(Ω)": [np.nan],
+            "Phase(°)": [np.nan]
         })
+        
         curr_row = self.table_view.currentIndex().row()
         if curr_row == -1 or curr_row >= self.data.shape[0]:
             self.data = pd.concat([self.data, new_row], ignore_index=True)
@@ -485,32 +708,28 @@ class MainWindow(QMainWindow):
             top = self.data.iloc[:curr_row + 1]
             bottom = self.data.iloc[curr_row + 1:]
             self.data = pd.concat([top, new_row, bottom], ignore_index=True)
-
-        # update model in-place
+        
         self.table_model.set_dataframe(self.data)
         self.table_view.resizeColumnsToContents()
         self.update_plot()
 
-
     def delete_row(self):
-        """Delete the currently selected row."""
+        """Delete the selected row."""
         curr_row = self.table_view.currentIndex().row()
         if curr_row < 0:
             QMessageBox.warning(self, "Warning", "Please select a row to delete")
             return
-
+        
         confirm = QMessageBox.question(
-            self,
-            "Confirm Deletion",
-            "Are you sure you want to delete this row?",
+            self, "Confirm Deletion", "Delete this row?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
+        
         if confirm == QMessageBox.StandardButton.Yes:
             self.data = self.data.drop(index=curr_row).reset_index(drop=True)
             self.table_model.set_dataframe(self.data)
             self.table_view.resizeColumnsToContents()
             self.update_plot()
-
 
     def upload_button_clicked(self):
         """Load CSV or Excel file into the table."""
@@ -521,193 +740,52 @@ class MainWindow(QMainWindow):
             return
         try:
             self.data = pd.read_csv(file) if file.endswith(".csv") else pd.read_excel(file)
-            for col in ["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Phase"]:
+            # Ensure required columns exist
+            required_cols = ["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Magnitude(Ω)", "Phase(°)"]
+            for col in required_cols:
                 if col not in self.data.columns:
-                    self.data[col] = ""
-            self.model = TableModel(self.data)
-            self.model.dataChanged.connect(self.update_plot)
-            self.table.setModel(self.model)
+                    self.data[col] = np.nan
+            
+            self.table_model = TableModel(self.data)
+            self.table_model.dataChanged.connect(self.update_plot)
+            self.table_view.setModel(self.table_model)
+            self.table_view.resizeColumnsToContents()
             self.update_plot()
         except Exception as e:
             QMessageBox.warning(self, "File Error", str(e))
 
     # ---------------------------
-    # Data handling (thread-safe)
-    # ---------------------------
-    def _on_vna_data(self, data_package: dict):
-        """
-        Called from background callback or initial scan thread.
-        Must only perform light-weight operations and schedule heavy UI work on main thread.
-        """
-        def _process():
-            try:
-                freqs = np.asarray(data_package.get("frequencies", []))
-                resistance = np.asarray(data_package.get("resistance", np.zeros_like(freqs)))
-                phase = np.asarray(data_package.get("phase", np.angle(data_package.get("impedance", np.zeros_like(freqs)), deg=True)))
-
-                # build new rows
-                timestamp = data_package.get("timestamp", pd.Timestamp.now())
-                rows = [{"Timestamp": timestamp, "Frequency(Hz)": float(f), "Resistance(Ω)": float(r), "Phase": float(p)}
-                        for f, r, p in zip(freqs, resistance, phase)]
-
-                if rows:
-                    new_df = pd.DataFrame(rows)
-                    self.data = pd.concat([self.data, new_df], ignore_index=True)
-                    # update table model
-                    self.table_model.set_dataframe(self.data)
-                    self.table.setModel(self.table_model)
-                    self.table_view.resizeColumnsToContents()
-                    # update plot
-                    self.update_plot()
-                    self.statusBar().showMessage(f"Received scan #{data_package.get('scan_count', '?')} ({len(freqs)} pts)", 5000)
-            except Exception as e:
-                self._notify("warning", "Data Processing Error", str(e))
-
-        # ensure runs on GUI thread
-        QTimer.singleShot(0, _process)
-
-    # ---------------------------
-    # Single sweep
-    # ---------------------------
-    def run_single_sweep(self):
-        """Synchronous single sweep wrapper — runs in GUI thread only if small; prefer background use."""
-        # run in a background thread to keep UI snappy
-        def worker():
-            try:
-                if self.vna is None or not getattr(self.vna, "is_connected", False):
-                    self._notify("warning", "Connection", "Device not connected.")
-                    return
-                start = float(self.start_frequency.text() or 1e6)
-                stop = float(self.end_frequency.text() or 10e6)
-                points = int(self.sweep_points.text() or 201)
-                freqs, s11 = self.vna.scan(start, stop, points)
-                impedance = self.vna.s11_to_impedance(s11)
-                resistance = impedance.real
-                data_package = {
-                    "timestamp": pd.Timestamp.now(),
-                    "scan_count": 0,
-                    "frequencies": freqs,
-                    "impedance": impedance,
-                    "resistance": resistance,
-                    "phase": np.angle(impedance, deg=True),
-                    "s11": s11
-                }
-                # push to UI
-                self._on_vna_data(data_package)
-            except Exception as e:
-                self._notify("warning", "Sweep Error", str(e))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    # ---------------------------
-    # Start / Stop continuous logging
-    # ---------------------------
-    def start_logging_button(self):
-        """Start continuous logging: prefer NanoVNA.start_acquisition (threaded), else fallback to QTimer polling."""
-        if self.vna is None or not getattr(self.vna, "is_connected", False):
-            QMessageBox.warning(self, "Connection Error", "Please connect to the NanoVNA first.")
-            return
-
-        try:
-            start = float(self.start_frequency.text() or 1e6)
-            stop = float(self.end_frequency.text() or 10e6)
-            points = int(self.sweep_points.text() or 201)
-        except Exception:
-            QMessageBox.warning(self, "Input Error", "Invalid sweep parameters.")
-            return
-
-        started = False
-        try:
-            # pass callback that will be invoked from worker thread — callback should not touch GUI directly
-            started = self.vna.start_acquisition(start, stop, points, interval=2.0, callback=self.vna_callback_wrapper)
-        except Exception as e:
-            started = False
-            self._notify("warning", "Acquisition", f"start_acquisition raised: {e}")
-
-        if started:
-            # thread-based acquisition started
-            self.btn_start.setEnabled(False)
-            self.btn_stop.setEnabled(True)
-            self.act_start.setEnabled(False)
-            self.act_stop.setEnabled(True)
-            self.statusBar().showMessage("Threaded logging started...", 5000)
-            return
-
-        # fallback to QTimer polling
-        try:
-            if not self.poll_timer.isActive():
-                self.poll_timer.start()
-                self.btn_start.setEnabled(False)
-                self.btn_stop.setEnabled(True)
-                self.act_start.setEnabled(False)
-                self.act_stop.setEnabled(True)
-                self.statusBar().showMessage("Logging started (timer fallback)...", 5000)
-        except Exception as e:
-            QMessageBox.warning(self, "Logging Error", str(e))
-
-    def vna_callback_wrapper(self, data_package):
-        """
-        This wrapper is passed to NanoVNA.start_acquisition.
-        NanoVNA will call it from a worker thread — the wrapper must schedule GUI updates on the main thread.
-        """
-        # pass to our main handler (it marshals to GUI thread)
-        try:
-            self._on_vna_data(data_package)
-        except Exception as e:
-            # do not let exceptions propagate to worker thread
-            self._notify("warning", "Callback Error", str(e))
-
-    def stop_logging_button(self):
-        """Stop threaded acquisition and timer fallback."""
-        try:
-            # stop NanoVNA threaded acquisition if active
-            if self.vna and getattr(self.vna, "acquisition_active", False):
-                try:
-                    self.vna.stop_acquisition()
-                except Exception:
-                    pass
-
-            # stop timer fallback
-            if self.poll_timer.isActive():
-                self.poll_timer.stop()
-
-            self.btn_start.setEnabled(True)
-            self.btn_stop.setEnabled(False)
-            self.act_start.setEnabled(True)
-            self.act_stop.setEnabled(False)
-
-            self.statusBar().showMessage("Logging stopped.", 5000)
-        except Exception as e:
-            QMessageBox.warning(self, "Stop Error", str(e))
-
-    # ---------------------------
     # Plot update
     # ---------------------------
     def update_plot(self):
-        """Update the Resistance vs Frequency plot from current self.data."""
+        """Update the Resistance vs Frequency plot from current data."""
         try:
             if self.data.empty or "Frequency(Hz)" not in self.data.columns or "Resistance(Ω)" not in self.data.columns:
-                # clear plot
                 self.plot_widget.clear()
                 return
 
             x = pd.to_numeric(self.data["Frequency(Hz)"], errors='coerce')
             y = pd.to_numeric(self.data["Resistance(Ω)"], errors='coerce')
             mask = x.notnull() & y.notnull()
+            
             if mask.sum() == 0:
                 self.plot_widget.clear()
                 return
+                
             xvals = x[mask].astype(float).values
             yvals = y[mask].astype(float).values
+            
             self.plot_widget.clear()
-            self.plot_widget.plot(xvals, yvals, pen='r', symbol='o', symbolSize=5)
+            self.plot_widget.plot(xvals, yvals, pen='r', symbol='o', symbolSize=3)
+            
         except Exception as e:
-            self._notify("warning", "Plot Error", str(e))
+            QMessageBox.warning(self, "Plot Error", str(e))
 
     # ---------------------------
     # Export
     # ---------------------------
     def export_csv(self):
+        """Export data to CSV file."""
         try:
             if self.data.empty:
                 QMessageBox.information(self, "Export", "No data to export.")
@@ -716,7 +794,7 @@ class MainWindow(QMainWindow):
             if not fname:
                 return
             self.data.to_csv(fname, index=False)
-            self.statusBar().showMessage(f"Saved {len(self.data)} rows to {fname}", 100000)
+            self.statusBar().showMessage(f"Saved {len(self.data)} rows to {fname}", 5000)
         except Exception as e:
             QMessageBox.warning(self, "Export Error", str(e))
 
@@ -724,9 +802,9 @@ class MainWindow(QMainWindow):
     # Theme toggle
     # ---------------------------
     def toggle_theme(self):
+        """Toggle between light and dark themes."""
         self.is_dark = not self.is_dark
         if self.is_dark:
-            # simple dark stylesheet
             self.setStyleSheet("""
                 QWidget { background: #202020; color: #e0e0e0; }
                 QLineEdit, QComboBox, QTableView { background: #2a2a2a; color: #e0e0e0; }
@@ -742,7 +820,7 @@ class MainWindow(QMainWindow):
     # Analysis windows & calculators
     # ---------------------------
     def sauerbrey_konazawa(self):
-        """Open Sauerbrey & Konazawa dialog (simple implementation)."""
+        """Open Sauerbrey & Konazawa dialog."""
         dlg = QWidget()
         dlg.setWindowTitle("Sauerbrey & Konazawa")
         dlg.resize(700, 480)
@@ -768,7 +846,6 @@ class MainWindow(QMainWindow):
                 dd = float(density.text())
                 ss = float(shear.text())
                 aa = float(area.text())
-                # latest frequency from data
                 if self.data.empty or "Frequency(Hz)" not in self.data.columns:
                     QMessageBox.warning(self, "Data Error", "No frequency data available.")
                     return
@@ -791,17 +868,14 @@ class MainWindow(QMainWindow):
     def crystallizationdynamics(self):
         """Open Crystallization Dynamics window with multi-plot + BVD params."""
         try:
-            # Close if already open
             if hasattr(self, 'cryst_dyn_win') and self.cryst_dyn_win:
                 self.cryst_dyn_win.close()
 
-            # New window
             self.cryst_dyn_win = QWidget()
             self.cryst_dyn_win.setWindowTitle("Crystallization Dynamics")
             self.cryst_dyn_win.resize(1400, 900)
             layout = QVBoxLayout(self.cryst_dyn_win)
 
-            # Toolbar for this window
             toolbar = QToolBar()
             toolbar.setIconSize(QSize(16, 16))
             act_view_table = QAction("View Table", self.cryst_dyn_win)
@@ -818,6 +892,7 @@ class MainWindow(QMainWindow):
             left_widget = QWidget()
             left_layout = QVBoxLayout(left_widget)
             left_layout.setContentsMargins(0, 0, 0, 0)
+            
             self.plot_resistance = pg.PlotWidget(title="Motional Resistance vs Time")
             self.plot_resistance.setLabel("left", "Rm (Ω)")
             self.plot_resistance.setLabel("bottom", "Time (s)")
@@ -870,7 +945,7 @@ class MainWindow(QMainWindow):
     def plot_crystallization_data(self):
         """Extract sweep-by-sweep BVD params and update dynamics plots."""
         try:
-            from Models.Butterworth import parameter  # local import to avoid crash if missing
+            from Models.Butterworth import parameter
         except ImportError:
             QMessageBox.warning(self, "Missing Model", "Butterworth model not found.")
             return
@@ -901,9 +976,12 @@ class MainWindow(QMainWindow):
                 block = self.data.iloc[i * points:(i + 1) * points]
                 freqs = pd.to_numeric(block["Frequency(Hz)"], errors='coerce').dropna().values
                 resist = pd.to_numeric(block["Resistance(Ω)"], errors='coerce').fillna(0).values
+                react = pd.to_numeric(block["Reactance(Ω)"], errors='coerce').fillna(0).values
+                
                 if len(freqs) == 0:
                     continue
-                impedance = resist + 0j
+                    
+                impedance = resist + 1j * react
                 try:
                     Rm, Lm, Cm, C0, fs = parameter(freqs, impedance, resist)
                     rm_values.append(Rm)
@@ -1079,18 +1157,26 @@ class MainWindow(QMainWindow):
     # Cleanup on close
     # ---------------------------
     def closeEvent(self, event):
+        """Clean up resources when closing the application."""
         try:
-            if self.poll_timer and self.poll_timer.isActive():
+            # Stop any ongoing acquisition
+            if self.acquisition_active:
+                self.acquisition_active = False
+                self.acquisition_stop_flag.set()
+                if self.acquisition_thread and self.acquisition_thread.is_alive():
+                    self.acquisition_thread.join(timeout=2.0)
+            
+            # Stop timer if running
+            if hasattr(self, 'poll_timer') and self.poll_timer.isActive():
                 self.poll_timer.stop()
-            if self.vna:
-                try:
-                    self.vna.stop_acquisition()
-                except Exception:
-                    pass
+            
+            # Close NanoVNA connection
+            if self.vna and self._is_vna_connected():
                 try:
                     self.vna.disconnect()
                 except Exception:
                     pass
+            
             event.accept()
         except Exception:
             event.accept()
