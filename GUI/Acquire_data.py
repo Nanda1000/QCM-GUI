@@ -524,33 +524,3 @@ def main():
 if __name__ == "__main__":
     # Run interactive main program
     main()
-    
-    # Alternative: Direct scripted usage example
-    """
-    # Create NanoVNA instance
-    vna = NanoVNA()
-    
-    try:
-        # Connect to device
-        if vna.connect():
-            print("Connected successfully!")
-            
-            # Set up custom sweep
-            if vna.sweep(start_freq=1000000, stop_freq=100000000, points=201):
-                
-                # Acquire data - note the correct unpacking!
-                result = vna.acquire()
-                if result[0] is not None:
-                    freqs, s11, impedances, resistance, reactance, magnitude, phase = result
-                    
-                    print(f"Acquired {len(s11)} measurements")
-                    print(f"Frequency range: {freqs[0]/1e6:.1f} to {freqs[-1]/1e6:.1f} MHz")
-                    
-                    # Your data processing code here...
-            
-        else:
-            print("Failed to connect!")
-            
-    finally:
-        vna.disconnect()
-    """
