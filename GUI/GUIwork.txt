@@ -1,0 +1,44 @@
+# Acquire_data.py
+
+This code works around commands of communicating with equipment like info, sweep, data, data 0
+You can verify it through Putty or Tera terminals
+
+1. Global declaration
+Some variables were globally declared such as port, baudrate, serial communication
+
+2. Scanning Ports (scan_ports)
+Scanning ports by creating a empty array for storing all available ports, for every avilable port, we add device and devices description
+
+3. Selecting the Port (select_ports)
+Asking the user to choose from the available ports, user will be given choice of selecting the port or leave it to the program, it detects automatically by 
+going through the loop of ports available one by one. If user selects their choice, it checks and connects to it
+
+4. Testing the connection (test_connection)
+Opening the communication by using serial communication, then reseting the input and output buffer,
+writing to device to get prompt like 'ch' or 'ch0', then send the command info to communicate, we also check for waiting information.
+
+5. Connecting to the device(connect)
+user selects the port or autodetect it, opens the communication with device, verify the prompt pattern o how the device is asking the program to communicate.
+then it connects, available to communicate
+
+6. Sending the commands(send_cmd)
+We clear out the input buffer, like if there any old data and send the command for processing and wait for some time, when you start aterminal, there will be echos of your commands, we skip that echo,
+
+7. Getting the data(get_data)
+if the data coming from the device is two numbers, will split the numbers into indices
+
+8.Converting the data(parse_data)
+convert the data from device to S11 which zeroth index is real part and 1st index is imaginary
+
+9. S11 to impedance
+Convert s11 to impedance using the formula defined in the code
+
+10. Frequencies(get_frequencies)
+We get frequencies from the device, if none, it gets the default global values
+
+11. Sweep setup(intercative_sweep_setup)
+user will given the choice to enter or choose their Starta nd stop frequency and sweep points
+then update these values in sweep function by storing.
+
+12. Acquiring the data(acquire)
+Here is the main function, we use 'data 0' command to get s11 data, parse the values to imedance, resistance etc.,
