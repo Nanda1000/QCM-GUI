@@ -104,7 +104,7 @@ class TableModel(QAbstractTableModel):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("NanoVNA Data Logger & Analysis")
+        self.setWindowTitle("Crystallization Analyzer")
         self.resize(1400, 900)
         self.setMinimumSize(1000, 700)
 
