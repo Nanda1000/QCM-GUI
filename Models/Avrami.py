@@ -62,7 +62,7 @@ def fit(t, f_array):
     if np.any(np.isnan(X_t)) or np.any(np.isinf(X_t)):
         raise ValueError("X(t) contains NaN or Inf values.")
 
-    if np.std(X_t) < 1e-4:
+    if np.std(X_t) < 1e-1:
         raise ValueError("Crystallization fraction variation is too low.")
 
     bounds = ([1e-10, 0.1], [1e-1, 10.0])
