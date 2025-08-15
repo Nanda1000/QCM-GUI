@@ -18,12 +18,14 @@ from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (
     QFileDialog, QGroupBox, QSplitter, QWidget, QTableView, QLineEdit, QToolBar,
     QHBoxLayout, QMessageBox, QPushButton, QLabel, QVBoxLayout, QMainWindow,
-    QApplication, QStatusBar, QFormLayout, QComboBox, QSizePolicy, QFrame
+    QApplication, QStatusBar, QFormLayout, QComboBox, QSizePolicy, QFrame, QTabWidget
 )
 from Models.Butterworth import parameter as bvd_parameter, butterworth
 from Models.Avrami import compute_X_t, fit as avrami_fit, formula as avrami_formula
 from Models.Sauerbrey import sauerbrey
 from Models.konazawa import konazawa
+from Models.Sauerbrey import sauerbrey, parameter as sauer_param
+from Models.konazawa import konazawa, parameter as konaz_param
 #Matplotlib
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -1039,51 +1041,276 @@ class MainWindow(QMainWindow):
     # Analysis windows & calculators
 
     def sauerbrey_konazawa(self):
+        """Open Sauerbrey & Konazawa analysis window"""
+        try:
+            if hasattr(self, 'sauerbrey_win') and self.sauerbrey_win:
+                self.sauerbrey_win.close()
 
-        dlg = QWidget()
-        dlg.setWindowTitle("Sauerbrey & Konazawa")
-        dlg.resize(700, 480)
-        layout = QVBoxLayout(dlg)
+            # Create new window
+            self.sauerbrey_win = QWidget()
+            self.sauerbrey_win.setWindowTitle("Sauerbrey & Konazawa Analysis")
+            self.sauerbrey_win.resize(800, 600)
+            self.sauerbrey_win.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            
 
-        form = QFormLayout()
-        f0 = QLineEdit("5000000")
-        density = QLineEdit("2650")
-        shear = QLineEdit("2.947e10")
-        area = QLineEdit("1e-4")
-        form.addRow("Resonant freq (Hz):", f0)
-        form.addRow("Quartz density (kg/m³):", density)
-        form.addRow("Shear modulus (Pa):", shear)
-        form.addRow("Electrode area (m²):", area)
+            main_layout = QVBoxLayout(self.sauerbrey_win)
+            
+           
+            tab_widget = QTabWidget()
+            
+     
+            sauerbrey_tab = QWidget()
+            sauerbrey_layout = QVBoxLayout(sauerbrey_tab)
+            
 
-        calc_btn = QPushButton("Calculate Sauerbrey Mass")
-        result = QLineEdit()
-        result.setReadOnly(True)
+            sauerbrey_group = QGroupBox("Sauerbrey Parameters")
+            sauerbrey_form = QFormLayout()
+            
+            # Input fields
+            self.sauerb_f0 = QLineEdit("5000000")  # 5 MHz default
+            self.sauerb_density = QLineEdit("2650")  # Quartz density kg/m³
+            self.sauerb_shear = QLineEdit("2.947e10")  # Shear modulus Pa
+            self.sauerb_area = QLineEdit("1e-4")  # Electrode area m²
+            
+            sauerbrey_form.addRow("Initial Resonant Frequency f₀ (Hz):", self.sauerb_f0)
+            sauerbrey_form.addRow("Quartz Density ρ (kg/m³):", self.sauerb_density)
+            sauerbrey_form.addRow("Shear Modulus μ (Pa):", self.sauerb_shear)
+            sauerbrey_form.addRow("Electrode Area A (m²):", self.sauerb_area)
+            
+            sauerbrey_group.setLayout(sauerbrey_form)
+            sauerbrey_layout.addWidget(sauerbrey_group)
+            
+            # Calculation section
+            calc_group = QGroupBox("Mass Change Calculation")
+            calc_layout = QVBoxLayout()
+            
+            # Current frequency display
+            freq_layout = QHBoxLayout()
+            freq_layout.addWidget(QLabel("Current Frequency ft (Hz):"))
+            self.sauerb_current_freq = QLineEdit()
+            self.sauerb_current_freq.setReadOnly(True)
+            freq_layout.addWidget(self.sauerb_current_freq)
+            calc_layout.addLayout(freq_layout)
+            
+            # Auto-detect frequency button
+            detect_freq_btn = QPushButton("Auto-Detect Current Frequency")
+            detect_freq_btn.clicked.connect(lambda: self.auto_detect_frequency('sauerbrey'))
+            calc_layout.addWidget(detect_freq_btn)
+            
+            # Calculate button
+            calc_btn = QPushButton("Calculate Mass Change")
+            calc_btn.clicked.connect(lambda: self.calculate_sauerbrey_mass(sauerbrey))
+            calc_layout.addWidget(calc_btn)
+            
+            # Results
+            result_layout = QFormLayout()
+            self.sauerb_freq_shift = QLineEdit()
+            self.sauerb_freq_shift.setReadOnly(True)
+            self.sauerb_mass_change = QLineEdit()
+            self.sauerb_mass_change.setReadOnly(True)
+            self.sauerb_mass_per_area = QLineEdit()
+            self.sauerb_mass_per_area.setReadOnly(True)
+            
+            result_layout.addRow("Frequency Shift Δf (Hz):", self.sauerb_freq_shift)
+            result_layout.addRow("Mass Change Δm (kg):", self.sauerb_mass_change)
+            result_layout.addRow("Mass Change Δm (ng/cm²):", self.sauerb_mass_per_area)
+            
+            calc_layout.addLayout(result_layout)
+            calc_group.setLayout(calc_layout)
+            sauerbrey_layout.addWidget(calc_group)
+            
+            # Add Sauerbrey tab
+            tab_widget.addTab(sauerbrey_tab, "Sauerbrey Analysis")
+            
+            konazawa_tab = QWidget()
+            konazawa_layout = QVBoxLayout(konazawa_tab)
+            
+            konazawa_group = QGroupBox("Konazawa Parameters")
+            konazawa_form = QFormLayout()
+            
+            self.konaz_f0 = QLineEdit("5000000")  # 5 MHz default
+            self.konaz_p = QLineEdit("2650")  # Quartz density kg/m³
+            self.konaz_u = QLineEdit("2.947e10")  # Shear Modulus of quartz in Pascals
+            self.konaz_p1 = QLineEdit("1000")  # Liquid density kg/m³, can be editable, if any other liqid used
 
-        def _calc():
-            try:
-                ff0 = float(f0.text())
-                dd = float(density.text())
-                ss = float(shear.text())
-                aa = float(area.text())
-                if self.data.empty or "Frequency(Hz)" not in self.data.columns:
-                    QMessageBox.warning(self, "Data Error", "No frequency data available.")
-                    return
-                ft = float(pd.to_numeric(self.data["Frequency(Hz)"], errors='coerce').dropna().iloc[-1])
-                mass_change = sauerbrey(ff0, dd, ss, ft, aa)
-                result.setText(f"{mass_change:.6e}")
-            except Exception as e:
-                QMessageBox.warning(self, "Calculation Error", str(e))
+            
+            konazawa_form.addRow("Initial Frequency f₀ (Hz):", self.konaz_f0)
+            konazawa_form.addRow("Quartz Density p (kg/m³):", self.konaz_p)
+            konazawa_form.addRow("Shear Modulus μ (Pa):", self.konaz_u)
+            konazawa_form.addRow("Liquid Density p1 (kg/m³):", self.konaz_p1)
+            
+            konazawa_group.setLayout(konazawa_form)
+            konazawa_layout.addWidget(konazawa_group)
+            
+            # Konazawa calculation
+            konaz_calc_group = QGroupBox("Konazawa Calculation")
+            konaz_calc_layout = QVBoxLayout()
+            
+            # Current frequency display
+            konaz_freq_layout = QHBoxLayout()
+            konaz_freq_layout.addWidget(QLabel("Current Frequency ft (Hz):"))
+            self.konaz_current_freq = QLineEdit()
+            self.konaz_current_freq.setReadOnly(True)
+            konaz_freq_layout.addWidget(self.konaz_current_freq)
+            konaz_calc_layout.addLayout(konaz_freq_layout)
+            
+            konaz_detect_freq_btn = QPushButton("Auto-Detect Current Frequency")
+            konaz_detect_freq_btn.clicked.connect(lambda: self.auto_detect_frequency('konazawa'))
+            konaz_calc_layout.addWidget(konaz_detect_freq_btn)
+            
+            konaz_calc_btn = QPushButton("Calculate Konazawa")
+            konaz_calc_btn.clicked.connect(lambda: self.calculate_konazawa_result(konazawa))
+            konaz_calc_layout.addWidget(konaz_calc_btn)
+            
+            # Results
+            konaz_result_layout = QFormLayout()
+            self.konaz_freq_shift = QLineEdit()
+            self.konaz_freq_shift.setReadOnly(True)
+            self.konaz_result = QLineEdit()
+            self.konaz_result.setReadOnly(True)
+            
+            konaz_result_layout.addRow("Frequency Shift Δf (Hz):", self.konaz_freq_shift)
+            konaz_result_layout.addRow("Konazawa Result n:", self.konaz_result)
+            
+            konaz_calc_layout.addLayout(konaz_result_layout)
+            konaz_calc_group.setLayout(konaz_calc_layout)
+            konazawa_layout.addWidget(konaz_calc_group)
+            
 
-        calc_btn.clicked.connect(_calc)
+            tab_widget.addTab(konazawa_tab, "Konazawa Analysis")
+            
+  
+            main_layout.addWidget(tab_widget)
+       
+            self.auto_detect_frequency('both')
+            
+            # Show the window
+            self.sauerbrey_win.show()
+            
+        except ImportError as e:
+            QMessageBox.warning(self, "Import Error", f"Could not import required modules: {str(e)}\nMake sure Models/Sauerbrey.py and Models/konazawa.py are available.")
+        except Exception as e:
+            QMessageBox.warning(self, "Window Error", f"Error opening Sauerbrey/Konazawa window: {str(e)}")
 
-        layout.addLayout(form)
-        layout.addWidget(calc_btn)
-        layout.addWidget(QLabel("Mass Change (kg):"))
-        layout.addWidget(result)
-        dlg.setLayout(layout)
-        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        dlg.show()
-        
+    def auto_detect_frequency(self, target='both'):
+        """Auto-detect current frequency from impedance data using your parameter functions"""
+        try:
+            if self.data.empty:
+                QMessageBox.warning(self, "No Data", "No measurement data available.")
+                return
+            
+            # Get the latest sweep data
+            points = int(self.sweep_points.text() or 201)
+            if len(self.data) < points:
+                QMessageBox.warning(self, "Insufficient Data", "Please run again")
+                return
+            
+            last_sweep = self.data.tail(points)
+            freqs = pd.to_numeric(last_sweep["Frequency(Hz)"], errors='coerce').dropna().values
+            resist = pd.to_numeric(last_sweep["Resistance(Ω)"], errors='coerce').fillna(0).values
+            react = pd.to_numeric(last_sweep["Reactance(Ω)"], errors='coerce').fillna(0).values
+            
+            if len(freqs) == 0:
+                QMessageBox.warning(self, "Data Error", "No valid frequency data")
+                return
+            
+            # Create impedance array
+            impedance = resist + 1j * react
+
+            
+            # Get resonant frequency using your parameter functions
+            ft_sauer = sauer_param(freqs, impedance)
+            ft_konaz = konaz_param(freqs, impedance)
+            
+            if target in ['sauerbrey', 'both'] and hasattr(self, 'sauerb_current_freq'):
+                self.sauerb_current_freq.setText(f"{ft_sauer:.2f}")
+                
+            if target in ['konazawa', 'both'] and hasattr(self, 'konaz_current_freq'):
+                self.konaz_current_freq.setText(f"{ft_konaz:.2f}")
+                
+            if target == 'both':
+                self.statusBar().showMessage(f"Auto-detected frequencies - Sauerbrey: {ft_sauer:.2f} Hz, Konazawa: {ft_konaz:.2f} Hz", 3000)
+            else:
+                self.statusBar().showMessage(f"Auto-detected frequency: {ft_sauer if target == 'sauerbrey' else ft_konaz:.2f} Hz", 3000)
+                
+        except ImportError as e:
+            QMessageBox.warning(self, "Import Error", f"Could not import parameter functions: {str(e)}")
+        except Exception as e:
+            QMessageBox.warning(self, "Detection Error", f"Error detecting frequency: {str(e)}")
+
+    def calculate_sauerbrey_mass(self, sauerbrey_func):
+        """Calculate mass change using your Sauerbrey function"""
+        try:
+            # Get parameters
+            f0 = float(self.sauerb_f0.text())
+            p = float(self.sauerb_density.text())  # density
+            u = float(self.sauerb_shear.text())   # shear modulus
+            A = float(self.sauerb_area.text())    # area
+            
+            # Get current frequency
+            ft_text = self.sauerb_current_freq.text()
+            if not ft_text:
+                QMessageBox.warning(self, "Data Error", "No current frequency available. Please auto-detect or run a measurement first.")
+                return
+            
+            ft = float(ft_text)
+            
+            # Calculate using your Sauerbrey function: sauerbrey(f0, p, u, ft, A)
+            mass_change = sauerbrey_func(f0, p, u, ft, A)
+            freq_shift = f0 - ft
+            
+            # Calculate mass per unit area in ng/cm²
+            mass_per_area = abs(mass_change) / A * 1e4 * 1e9  # Convert kg/m² to ng/cm²
+            
+            # Update results
+            self.sauerb_freq_shift.setText(f"{freq_shift:.2f}")
+            self.sauerb_mass_change.setText(f"{mass_change:.6e}")
+            self.sauerb_mass_per_area.setText(f"{mass_per_area:.2f}")
+            
+            QMessageBox.information(self, "Sauerbrey Calculation Complete", 
+                                f"Frequency Shift: {freq_shift:.2f} Hz\n"
+                                f"Mass Change: {mass_change:.6e} kg\n"
+                                f"Mass Change: {mass_per_area:.2f} ng/cm²")
+            
+        except ValueError as e:
+            QMessageBox.warning(self, "Input Error", f"Invalid input parameters: {e}")
+        except Exception as e:
+            QMessageBox.warning(self, "Calculation Error", f"Error calculating Sauerbrey: {e}")
+
+    def calculate_konazawa_result(self, konazawa_func):
+        """Calculate result using your Konazawa function"""
+        try:
+            # Get parameters
+            f0 = float(self.konaz_f0.text())
+            p = float(self.konaz_p.text())    # quartz density
+            u = float(self.konaz_u.text())   # viscosity
+            p1 = float(self.konaz_p1.text()) # liquid density
+            
+            # Get current frequency
+            ft_text = self.konaz_current_freq.text()
+            if not ft_text:
+                QMessageBox.warning(self, "Data Error", "No current frequency available. Please auto-detect or run a measurement first.")
+                return
+            
+            ft = float(ft_text)
+            
+            # Calculate using your Konazawa function: konazawa(f0, p, u, ft, p1)
+            konaz_result = konazawa_func(f0, p, u, ft, p1)
+            freq_shift = f0 - ft
+            
+            # Update results
+            self.konaz_freq_shift.setText(f"{freq_shift:.2f}")
+            self.konaz_result.setText(f"{konaz_result:.6e}")
+            
+            QMessageBox.information(self, "Konazawa Calculation Complete", 
+                                f"Frequency Shift: {freq_shift:.2f} Hz\n"
+                                f"Konazawa Result n: {konaz_result:.6e}")
+            
+        except ValueError as e:
+            QMessageBox.warning(self, "Input Error", f"Invalid input parameters: {e}")
+        except Exception as e:
+            QMessageBox.warning(self, "Calculation Error", f"Error calculating Konazawa: {e}")
+            
         #Crystallization dynamics using BVD model
 
     def crystallizationdynamics(self):
