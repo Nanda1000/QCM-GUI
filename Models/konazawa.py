@@ -2,7 +2,7 @@
 
 import numpy as np
 
-def parameter(freqs, impedance):
+def parameter_konazawa(freqs, impedance):
     Z1 = np.abs(impedance)
     
     #Check for Series or Parllel resonant frequency
