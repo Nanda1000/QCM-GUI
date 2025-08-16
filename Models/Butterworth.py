@@ -91,9 +91,18 @@ def parameter(freqs, impedance, Resistance=None):
 
     min_index = np.argmin(fine_Z1)
     fs = fine_freqs[min_index]
+    
+    max_index = np.argmax(fine_Z1)
+    fp = fine_freqs[max_index]
+    
+    if fine_Z1[min_index] < fine_Z1[max_index]:
+        f = fs
+        return fs
+    else:
+        f = fp
 
     # Find nearest real value for fs and Rm
-    nearest_index = np.argmin(np.abs(freqs - fs))
+    nearest_index = np.argmin(np.abs(freqs - f))
     Zfs = impedance[nearest_index]
     Rm = Zfs.real
 
@@ -102,13 +111,13 @@ def parameter(freqs, impedance, Resistance=None):
     half_power_freqs = half_power_threshold(freqs, Z1, R)
     if len(half_power_freqs) >= 2:
         df = abs(half_power_freqs[-1] - half_power_freqs[0])
-        Q = fs / df
+        Q = f / df
     else:
         Q = 8000  # fallback
 
     # Compute Lm and Cm
-    Lm = Rm * Q / (2 * np.pi * fs) if fs > 0 else 1e-6
-    Cm = 1 / (Lm * (2 * np.pi * fs) ** 2) if Lm > 0 and fs > 0 else 1e-12
+    Lm = Rm * Q / (2 * np.pi * f) if f > 0 else 1e-6
+    Cm = 1 / (Lm * (2 * np.pi * f) ** 2) if Lm > 0 and f > 0 else 1e-12
 
     # Estimate static capacitance C0
     try:
@@ -125,9 +134,9 @@ def parameter(freqs, impedance, Resistance=None):
     return Rm, Lm, Cm, C0, fs
 
 # Residuals for fitting model
-def fit_data(parameters, fs, Z_measured):
+def fit_data(parameters, f, Z_measured):
     Rm, Lm, Cm, C0 = parameters
-    Z_model = butterworth(fs, Rm, Lm, Cm, C0)
+    Z_model = butterworth(f, Rm, Lm, Cm, C0)
     residual = np.concatenate([np.real(Z_model - Z_measured), np.imag(Z_model - Z_measured)])
     return residual
 
@@ -140,9 +149,9 @@ if __name__ == "__main__":
         raise Exception("No serial ports found.")
 
     device_path = ports[0].device
-    freqs, Resistance, impedance, _, _, _ = acquire_data(device_path)
+    freqs, Resistance, impedance, _, _, _ = acquire(device_path)
 
-    Rm, Lm, Cm, C0, fs = parameter(freqs, impedance, Resistance)
+    Rm, Lm, Cm, C0, f = parameter(freqs, impedance, Resistance)
     if None in (Rm, Lm, Cm, C0):
      raise ValueError("Parameter extraction failed. Cannot fit data.")
     else:

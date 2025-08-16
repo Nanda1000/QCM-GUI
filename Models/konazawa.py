@@ -5,11 +5,21 @@ import numpy as np
 def parameter(freqs, impedance):
     Z1 = np.abs(impedance)
     
+    #Check for Series or Parllel resonant frequency
+    
+    
     min_index = np.argmin(Z1)
+    fs = freqs[min_index]
     
-    ft = freqs[min_index]
+    max_index = np.argmax(Z1)
+    fp = freqs[max_index]
     
-    return ft
+    if Z1[min_index] < Z1[max_index]:
+        f0 = fs
+        return fs
+    else:
+        f0 = fp
+    return f0
     
 
 
