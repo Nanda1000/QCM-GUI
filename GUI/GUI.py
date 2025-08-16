@@ -20,12 +20,12 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QMessageBox, QPushButton, QLabel, QVBoxLayout, QMainWindow,
     QApplication, QStatusBar, QFormLayout, QComboBox, QSizePolicy, QFrame, QTabWidget
 )
-from Models.Butterworth import parameter as bvd_parameter, butterworth
+from Models.Butterworth import parameter, butterworth
 from Models.Avrami import compute_X_t, fit as avrami_fit, formula as avrami_formula
 from Models.Sauerbrey import sauerbrey
 from Models.konazawa import konazawa
-from Models.Sauerbrey import sauerbrey, parameter as sauer_param
-from Models.konazawa import konazawa, parameter as konaz_param
+from Models.Sauerbrey import sauerbrey, parameter_sauerbrey as sauer_param
+from Models.konazawa import konazawa, parameter_konazawa as konaz_param
 #Matplotlib
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -490,6 +490,8 @@ class MainWindow(QMainWindow):
             # File paths
             csv_path = os.path.join(file, "Resistance vs Frequency.csv")
             csv_path1 = os.path.join(file, "Crystallization Dynamics Table.csv")
+            bvd_path = os.path.join(file, "BVD Parameters.csv")
+            analysis_path = os.path.join(file, "Analysis Results.csv")
             pdf_path = os.path.join(file, "Report.pdf")
             zip_path = os.path.join(file, "Crystallization Report.zip")
             
@@ -521,6 +523,84 @@ class MainWindow(QMainWindow):
                 img = Image(plot_filename, width=400, height=300)
                 elements.append(Paragraph("Resistance vs Frequency Plot", styles["Heading3"]))
                 elements.append(img)
+                elements.append(Spacer(1, 12))
+            
+            # BVD Parameters
+            bvd_data = []
+            if hasattr(self, 'rm_edit') and self.rm_edit.text():
+                bvd_data.append(['Parameter', 'Value', 'Unit'])
+                bvd_data.append(['Motional Resistance (Rm)', self.rm_edit.text(), 'Ω'])
+                bvd_data.append(['Motional Inductance (Lm)', self.lm_edit.text(), 'H'])
+                bvd_data.append(['Motional Capacitance (Cm)', self.cm_edit.text(), 'F'])
+                bvd_data.append(['Static Capacitance (C0)', self.c0_edit.text(), 'F'])
+                bvd_data.append(['Resonant Frequency (Fs)', self.f_edit.text(), 'Hz'])
+                
+                # Save BVD parameters to CSV
+                bvd_df = pd.DataFrame(bvd_data[1:], columns=bvd_data[0])
+                bvd_df.to_csv(bvd_path, index=False)
+                elements.append(Paragraph("BVD Parameters", styles["Heading2"]))
+                elements.append(Paragraph("BVD parameters saved to CSV file", styles["Normal"]))
+                elements.append(Spacer(1, 12))
+            
+            # Analysis Results (Sauerbrey and Konazawa)
+            analysis_data = []
+            has_analysis_data = False
+            
+            # Check for Sauerbrey results
+            if (hasattr(self, 'sauerb_freq_shift') and self.sauerb_freq_shift.text() and
+                hasattr(self, 'sauerb_mass_change') and self.sauerb_mass_change.text()):
+                if not has_analysis_data:
+                    analysis_data.append(['Analysis Type', 'Parameter', 'Value', 'Unit'])
+                    has_analysis_data = True
+                
+                analysis_data.extend([
+                    ['Sauerbrey', 'Initial Frequency (f₀)', getattr(self, 'sauerb_f0', QLineEdit()).text() or 'N/A', 'Hz'],
+                    ['Sauerbrey', 'Current Frequency (ft)', getattr(self, 'sauerb_current_freq', QLineEdit()).text() or 'N/A', 'Hz'],
+                    ['Sauerbrey', 'Frequency Shift (Δf)', self.sauerb_freq_shift.text(), 'Hz'],
+                    ['Sauerbrey', 'Mass Change (Δm)', self.sauerb_mass_change.text(), 'kg'],
+                    ['Sauerbrey', 'Mass Change per Area', self.sauerb_mass_per_area.text(), 'ng/cm²'],
+                    ['Sauerbrey', 'Quartz Density', getattr(self, 'sauerb_density', QLineEdit()).text() or 'N/A', 'kg/m³'],
+                    ['Sauerbrey', 'Shear Modulus', getattr(self, 'sauerb_shear', QLineEdit()).text() or 'N/A', 'Pa'],
+                    ['Sauerbrey', 'Electrode Area', getattr(self, 'sauerb_area', QLineEdit()).text() or 'N/A', 'm²']
+                ])
+            
+            # Check for Konazawa results
+            if (hasattr(self, 'konaz_freq_shift') and self.konaz_freq_shift.text() and
+                hasattr(self, 'konaz_result') and self.konaz_result.text()):
+                if not has_analysis_data:
+                    analysis_data.append(['Analysis Type', 'Parameter', 'Value', 'Unit'])
+                    has_analysis_data = True
+                
+                analysis_data.extend([
+                    ['Konazawa', 'Initial Frequency (f₀)', getattr(self, 'konaz_f0', QLineEdit()).text() or 'N/A', 'Hz'],
+                    ['Konazawa', 'Current Frequency (ft)', getattr(self, 'konaz_current_freq', QLineEdit()).text() or 'N/A', 'Hz'],
+                    ['Konazawa', 'Frequency Shift (Δf)', self.konaz_freq_shift.text(), 'Hz'],
+                    ['Konazawa', 'Konazawa Result (n)', self.konaz_result.text(), '-'],
+                    ['Konazawa', 'Quartz Density', getattr(self, 'konaz_p', QLineEdit()).text() or 'N/A', 'kg/m³'],
+                    ['Konazawa', 'Shear Modulus', getattr(self, 'konaz_u', QLineEdit()).text() or 'N/A', 'Pa'],
+                    ['Konazawa', 'Liquid Density', getattr(self, 'konaz_p1', QLineEdit()).text() or 'N/A', 'kg/m³']
+                ])
+            
+            
+            if (hasattr(self, 'k_edit') and self.k_edit.text() and
+                hasattr(self, 'n_edit') and self.n_edit.text()):
+                if not has_analysis_data:
+                    analysis_data.append(['Analysis Type', 'Parameter', 'Value', 'Unit'])
+                    has_analysis_data = True
+                
+                analysis_data.extend([
+                    ['Avrami', 'Initial Frequency (f₀)', getattr(self, 'f0_edit', QLineEdit()).text() or 'N/A', 'Hz'],
+                    ['Avrami', 'Final Frequency (f∞)', getattr(self, 'finf_edit', QLineEdit()).text() or 'N/A', 'Hz'],
+                    ['Avrami', 'Rate Constant (k)', self.k_edit.text(), 's⁻ⁿ'],
+                    ['Avrami', 'Avrami Exponent (n)', self.n_edit.text(), '-']
+                ])
+            
+            if has_analysis_data:
+                # Save analysis results to CSV
+                analysis_df = pd.DataFrame(analysis_data[1:], columns=analysis_data[0])
+                analysis_df.to_csv(analysis_path, index=False)
+                elements.append(Paragraph("Analysis Results", styles["Heading2"]))
+                elements.append(Paragraph("Analysis results saved to CSV file", styles["Normal"]))
                 elements.append(Spacer(1, 12))
             
             # Crystallization Dynamics table and plots
@@ -561,10 +641,13 @@ class MainWindow(QMainWindow):
             
             # Create Zip File
             with zipfile.ZipFile(zip_path, "w") as zipf:
-                if os.path.exists(csv_path):
-                    zipf.write(csv_path, arcname=os.path.basename(csv_path))
-                if os.path.exists(csv_path1):
-                    zipf.write(csv_path1, arcname=os.path.basename(csv_path1))
+                # Add all CSV files
+                csv_files = [csv_path, csv_path1, bvd_path, analysis_path]
+                for csv_file in csv_files:
+                    if os.path.exists(csv_file):
+                        zipf.write(csv_file, arcname=os.path.basename(csv_file))
+                
+                # Add PDF
                 zipf.write(pdf_path, arcname=os.path.basename(pdf_path))
                 
                 # Add plot images to zip

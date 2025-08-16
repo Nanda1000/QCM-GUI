@@ -5,7 +5,7 @@ import numpy as np
 
 #Gathering freqency data and calculating it from acquired data from nanovna
 
-def parameter(freqs, impedance):
+def parameter_sauerbrey(freqs, impedance):
     Z1 = np.abs(impedance)
     
     min_index = np.argmin(Z1)

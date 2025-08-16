@@ -91,15 +91,8 @@ def parameter(freqs, impedance, Resistance=None):
 
     min_index = np.argmin(fine_Z1)
     fs = fine_freqs[min_index]
-    
-    max_index = np.argmax(fine_Z1)
-    fp = fine_freqs[max_index]
-    
-    if fine_Z1[min_index] < fine_Z1[max_index]:
-        f = fs
-        return fs
-    else:
-        f = fp
+    f = fs
+
 
     # Find nearest real value for fs and Rm
     nearest_index = np.argmin(np.abs(freqs - f))
@@ -141,26 +134,4 @@ def fit_data(parameters, f, Z_measured):
     return residual
 
 
-# --- Main execution ---
 
-if __name__ == "__main__":
-    ports = list(serial.tools.list_ports.comports())
-    if not ports:
-        raise Exception("No serial ports found.")
-
-    device_path = ports[0].device
-    freqs, Resistance, impedance, _, _, _ = acquire(device_path)
-
-    Rm, Lm, Cm, C0, f = parameter(freqs, impedance, Resistance)
-    if None in (Rm, Lm, Cm, C0):
-     raise ValueError("Parameter extraction failed. Cannot fit data.")
-    else:
-     initial_guess = [Rm, Lm, Cm, C0]
-     
-    result = least_squares(fit_data, initial_guess, args=(freqs, impedance))
-
-    if not result.success:
-        raise RuntimeError("Fit failed:", result.message)
-
-    Rm_fit, Lm_fit, Cm_fit, C0_fit = result.x
-    Z_fit = butterworth(freqs, Rm_fit, Lm_fit, Cm_fit, C0_fit)

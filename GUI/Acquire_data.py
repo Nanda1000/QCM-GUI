@@ -204,7 +204,7 @@ class NanoVNA:
             print(f"[ERROR] Failed to send command '{cmd}': {e}")
             return []
     
-    def get_data(self, data_type=0):
+    def get_data(self, data_type):
         """Get measurement data from NanoVNA"""
         if not self.ser or not self.ser.is_open:
             print("[ERROR] Serial connection not open")
@@ -254,14 +254,14 @@ class NanoVNA:
                 else:
                     time.sleep(0.1)
             
-            print(f"[DEBUG] Retrieved {len(lines)} data points")
+            print(f"[DEBUG] Retrieved {len(lines)} data points for data type {data_type}")
             return lines
-            
+        
         except Exception as e:
             print(f"[ERROR] Failed to get data: {e}")
             return []
     
-    def parse_data(self, lines):
+    def parse_s11_data(self, lines):
         """Parse data lines into complex S11 values"""
         s11_list = []
         
@@ -273,11 +273,29 @@ class NanoVNA:
                     im = float(parts[1])
                     s11_list.append(complex(re, im))
             except (ValueError, IndexError) as e:
-                print(f"[WARNING] Could not parse line: '{line}' - {e}")
+                print(f"[WARNING] Could not parse S11 line: '{line}' - {e}")
                 continue
         
         print(f"[INFO] Parsed {len(s11_list)} S11 values")
         return s11_list
+    
+    def parse_s21_data(self, lines):
+        """Parse data lines into complex S21 values"""
+        s21_list = []
+        
+        for line in lines:
+            try:
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    re = float(parts[0])
+                    im = float(parts[1])
+                    s21_list.append(complex(re, im))
+            except (ValueError, IndexError) as e:
+                print(f"[WARNING] Could not parse S21 line: '{line}' - {e}")
+                continue
+        
+        print(f"[INFO] Parsed {len(s21_list)} S21 values")
+        return s21_list
     
     def s11_to_impedance(self, s11):
         """Convert S11 to impedance"""
@@ -380,41 +398,56 @@ class NanoVNA:
             print(f"[ERROR] Failed to set sweep: {e}")
             return False
     
-    def acquire(self):
-        """Acquire S11 data and convert to impedance - FIXED UNPACKING"""
+    def acquire(self, get_s21=False):
+        """Acquire S11 data and optionally S21 data, convert S11 to impedance"""
         try:
             # Get S11 data (data 0)
-            raw_lines = self.get_data(0)
+            raw_lines_s11 = self.get_data(0)
             
-            if not raw_lines:
-                print("[ERROR] No data received")
-                return None, None, None, None, None, None, None
+            if not raw_lines_s11:
+                print("[ERROR] No S11 data received")
+                return None, None, None, None, None, None, None, None, None
             
             # Parse S11 values
-            s11_values = self.parse_data(raw_lines)
+            s11_values = self.parse_s11_data(raw_lines_s11)
             
             if not s11_values:
                 print("[ERROR] No valid S11 values parsed")
-                return None, None, None, None, None, None, None
+                return None, None, None, None, None, None, None, None, None
             
             # Generate frequency array
             freqs = self.get_frequencies(len(s11_values))
             
-            # Convert to impedances
+            # Convert S11 to impedances
             impedances = np.array([self.s11_to_impedance(s) for s in s11_values])
             resistance = impedances.real
             reactance = impedances.imag
             magnitude = np.abs(impedances)
             phase = np.angle(impedances, deg=True)
             
-            print(f"[INFO] Acquired {len(s11_values)} measurements")
+            print(f"[INFO] Acquired {len(s11_values)} S11 measurements")
             print(f"[INFO] Frequency range: {freqs[0]/1e6:.3f} MHz to {freqs[-1]/1e6:.3f} MHz")
             
-            return freqs, s11_values, impedances, resistance, reactance, magnitude, phase
+            # Optionally get S21 data
+            s21_values = None
+            freqs_s21 = None
+            if get_s21:
+                raw_lines_s21 = self.get_data(1)
+                if raw_lines_s21:
+                    s21_values = self.parse_s21_data(raw_lines_s21)
+                    if s21_values:
+                        freqs_s21 = self.get_frequencies(len(s21_values))
+                        print(f"[INFO] Acquired {len(s21_values)} S21 measurements")
+                    else:
+                        print("[WARNING] No valid S21 values parsed")
+                else:
+                    print("[WARNING] No S21 data received")
+            
+            return freqs, s11_values, impedances, resistance, reactance, magnitude, phase, s21_values, freqs_s21
             
         except Exception as e:
             print(f"[ERROR] Failed to acquire data: {e}")
-            return None, None, None, None, None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None, None
     
     def get_info(self):
         """Get device information"""
@@ -427,14 +460,18 @@ class NanoVNA:
     def quick_measurement(self):
         """Quick measurement with current settings"""
         print("\n=== Quick Measurement ===")
-        result = self.acquire()
+        result = self.acquire(get_s21=True)  # Get both S11 and S21
         
         if result[0] is not None:
-            freqs, s11, impedances, resistance, reactance, magnitude, phase = result
+            freqs, s11, impedances, resistance, reactance, magnitude, phase, s21, freqs_s21 = result
             
             print(f"\nMeasurement Summary:")
-            print(f"Frequency points: {len(freqs)}")
-            print(f"Frequency range: {freqs[0]/1e6:.3f} - {freqs[-1]/1e6:.3f} MHz")
+            print(f"S11 frequency points: {len(freqs)}")
+            print(f"S11 frequency range: {freqs[0]/1e6:.3f} - {freqs[-1]/1e6:.3f} MHz")
+            
+            if s21 is not None:
+                print(f"S21 frequency points: {len(s21)}")
+                print(f"S21 frequency range: {freqs_s21[0]/1e6:.3f} - {freqs_s21[-1]/1e6:.3f} MHz")
             
             # Show some sample values
             mid_idx = len(impedances) // 2
@@ -443,6 +480,9 @@ class NanoVNA:
             print(f"  Impedance: {resistance[mid_idx]:.1f} + j{reactance[mid_idx]:.1f} Ω")
             print(f"  Magnitude: {magnitude[mid_idx]:.1f} Ω")
             print(f"  Phase: {phase[mid_idx]:.1f}°")
+            
+            if s21 is not None:
+                print(f"  S21: {s21[mid_idx]}")
             
             return result
         else:
