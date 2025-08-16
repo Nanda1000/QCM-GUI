@@ -47,6 +47,16 @@ class MplCanvas(FigureCanvas):
         fig.tight_layout()
         super().__init__(fig)
         
+    def clear(self):
+        """Clear the plot and Tables"""
+        try:
+            self.axes.clear()
+            self.axes.set_xlabel("Frequency(Hz)")
+            self.axes.set_ylabel("Resistance(Ω)")
+            self.draw()
+        except Exception:
+            pass
+        
 # Other plots from crystallization dynamics
 class MplMultiCanvas(FigureCanvas):
     def __init__(self, parent=None, width=8, height=6, dpi=100):
@@ -57,6 +67,35 @@ class MplMultiCanvas(FigureCanvas):
         self.axes_Cm = fig.add_subplot(224)
         fig.tight_layout()
         super().__init__(fig)
+        
+    def clear(self):
+        """Clear all subplots"""
+        try:
+            self.axes_Rm.clear()
+            self.axes_Fs.clear()
+            self.axes_Lm.clear()
+            self.axes_Cm.clear()
+            
+            # Reset titles and labels
+            self.axes_Rm.set_title("Motional Resistance vs time")
+            self.axes_Rm.set_xlabel("Time(s)")
+            self.axes_Rm.set_ylabel("Rm(Ω)")
+            
+            self.axes_Fs.set_title("Resonance frequency vs time")
+            self.axes_Fs.set_xlabel("Time(s)")
+            self.axes_Fs.set_ylabel("fs(Hz)")
+            
+            self.axes_Lm.set_title("Motional Inductance vs time")
+            self.axes_Lm.set_xlabel("Time(s)")
+            self.axes_Lm.set_ylabel("Lm(H)")
+            
+            self.axes_Cm.set_title("Motional Capacitance vs time")
+            self.axes_Cm.set_xlabel("Time(s)")
+            self.axes_Cm.set_ylabel("Cm(F)")
+            
+            self.draw()
+        except Exception:
+            pass
         
         
 
@@ -433,28 +472,52 @@ class MainWindow(QMainWindow):
         self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Magnitude(Ω)", "Phase(°)"])
         self.table_model.set_dataframe(self.data)
         
-        
-        self.plot_widget.axes.clear()
-        self.plot_widget.draw()
+        try:
+            self.plot_widget.clear()
+        except Exception:
+            try:
+                self.plot_widget.axes.clear()
+                self.plot_widget.axes.set_xlabel("Frequency(Hz)")
+                self.plot_widget.axes.set_ylabel("Resistance(Ω)")
+                self.plot_widget.draw()
+            except Exception:
+                pass
+                
         
         if hasattr(self, 'plot_crystallization_fraction') and self.plot_crystallization_fraction:
-            self.plot_crystallization_fraction.axes.clear()
-            self.plot_crystallization_fraction.draw()
+            try:
+                self.plot_crystallization_fraction.clear()
+            except Exception:
+                try:
+                    self.plot_crystallization_fraction.axes.clear()
+                    self.plot_crystallization_fraction.draw()
+                except Exception:
+                    pass
             
-        if hasattr(self, 'multiplot') and self.multiplot:
-            self.multiplot.axes_Rm.clear()
-            self.multiplot.axes_Fs.clear()
-            self.multiplot.axes_Lm.clear()
-            self.multiplot.axes_Cm.clear()
-            self.multiplot.draw()
         
+        if hasattr(self, 'multiplot') and self.multiplot:
+            try:
+                self.multiplot.clear()
+            except Exception:
+                try:
+                    self.multiplot.axes_Rm.clear()
+                    self.multiplot.axes_Fs.clear()
+                    self.multiplot.axes_Lm.clear()
+                    self.multiplot.axes_Cm.clear()
+                    self.multiplot.draw()
+                except Exception:
+                    pass
 
+        
         fields_to_clear = ['rm_edit', 'lm_edit', 'c0_edit', 'cm_edit', 'f0_edit', 'f_edit', 'finf_edit']
         for field in fields_to_clear:
             if hasattr(self, field):
-                getattr(self, field).clear()
+                try:
+                    getattr(self, field).clear()
+                except Exception:
+                    pass
         
-        # Reset analysis data
+        
         self.crystdynamics = pd.DataFrame()
         
         
@@ -696,6 +759,11 @@ class MainWindow(QMainWindow):
             
             if rows:
                 new_df = pd.DataFrame(rows)
+                if self.data.empty:
+                    self.data = new_df.copy()
+                else:
+                    self.data = pd.concat([self.data, new_df], ignore_index=True)
+                
                 self.data = pd.concat([self.data, new_df], ignore_index=True)
                 self.table_model.set_dataframe(self.data)
                 self.table_view.resizeColumnsToContents()
@@ -981,11 +1049,14 @@ class MainWindow(QMainWindow):
         })
         
         curr_row = self.table_view.currentIndex().row()
-        if curr_row == -1 or curr_row >= self.data.shape[0]:
-            self.data = pd.concat([self.data, new_row], ignore_index=True)
+        if self.data.empty or curr_row == -1 or curr_row >= self.data.shape[0]:
+            if self.data.empty:
+                self.data = new_row.copy()
+            else:
+                self.data = pd.concat([self.data, new_row], ignore_index=True)
         else:
-            top = self.data.iloc[:curr_row + 1]
-            bottom = self.data.iloc[curr_row + 1:]
+            top = self.data.iloc[:curr_row + 1].copy()
+            bottom = self.data.iloc[curr_row + 1:].copy()
             self.data = pd.concat([top, new_row, bottom], ignore_index=True)
         
         self.table_model.set_dataframe(self.data)
@@ -1126,8 +1197,13 @@ class MainWindow(QMainWindow):
     def sauerbrey_konazawa(self):
         """Open Sauerbrey & Konazawa analysis window"""
         try:
-            if hasattr(self, 'sauerbrey_win') and self.sauerbrey_win:
-                self.sauerbrey_win.close()
+            if hasattr(self, 'sauerbrey_win') and self.sauerbrey_win is not None:
+                try:
+                    self.sauerbrey_win.close()
+                    self.sauerbrey_win.deleteLater()
+                except Exception:
+                    pass
+                self.sauerbrey_win = None
 
             # Create new window
             self.sauerbrey_win = QWidget()
@@ -1399,8 +1475,13 @@ class MainWindow(QMainWindow):
     def crystallizationdynamics(self):
         try:
            
-            if hasattr(self, 'cryst_dyn_win') and self.cryst_dyn_win:
-                self.cryst_dyn_win.close()
+            if hasattr(self, 'cryst_dyn_win') and self.cryst_dyn_win is not None:
+                try:
+                    self.cryst_dyn_win.close()
+                    self.cryst_dyn_win.deleteLater()
+                except Exception:
+                    pass
+                self.cryst_dyn_win = None
 
             self.cryst_dyn_win = QWidget()
             self.cryst_dyn_win.setWindowTitle("Crystallization Dynamics")
@@ -1655,9 +1736,14 @@ class MainWindow(QMainWindow):
 
     def crystallizationkinetics(self):
         try:
-            if hasattr(self, 'cryst_kin_win') and self.cryst_kin_win:
-                self.cryst_kin_win.close()
-
+            if hasattr(self, 'cryst_kin_win') and self.cryst_kin_win is not None:
+                try:
+                    self.cryst_kin_win.close()
+                    self.cryst_kin_win.deleteLater()
+                except Exception:
+                    pass
+                
+            self.cryst_kin_win = None
             self.cryst_kin_win = QWidget()
             self.cryst_kin_win.setWindowTitle("Crystallization Kinetics (Avrami)")
             self.cryst_kin_win.resize(1000, 700)
