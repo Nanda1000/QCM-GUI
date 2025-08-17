@@ -11,15 +11,9 @@ def parameter_konazawa(freqs, impedance):
     min_index = np.argmin(Z1)
     fs = freqs[min_index]
     
-    max_index = np.argmax(Z1)
-    fp = freqs[max_index]
+    ft = fs
     
-    if Z1[min_index] < Z1[max_index]:
-        f0 = fs
-        return fs
-    else:
-        f0 = fp
-    return f0
+    return ft
     
 
 

@@ -8,21 +8,13 @@ import numpy as np
 def parameter_sauerbrey(freqs, impedance):
     Z1 = np.abs(impedance)
     
-    
     min_index = np.argmin(Z1)
-    fs = freqs[min_index]
     
-    max_index = np.argmax(Z1)
-    fp = freqs[max_index]
+    ft = freqs[min_index]
     
-    if Z1[min_index] < Z1[max_index]:
-        ft = fs
-        return ft
-    else:
-        ft = fp
-        return ft
     
-
+    
+    return ft
     
 """
 Sauerbrey equation to estimate mass deposited from frequency shift.
