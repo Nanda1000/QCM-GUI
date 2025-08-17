@@ -782,7 +782,6 @@ class MainWindow(QMainWindow):
                 else:
                     self.data = pd.concat([self.data, new_df], ignore_index=True)
                 
-                self.data = pd.concat([self.data, new_df], ignore_index=True)
                 self.table_model.set_dataframe(self.data)
                 self.table_view.resizeColumnsToContents()
                 self.update_plot()
@@ -839,13 +838,11 @@ class MainWindow(QMainWindow):
             if "(" in selected and selected.count("(") == 1:
                 port = selected.split("(")[0].strip()
             else:
-
                 port = selected.strip()
         
         def connect_worker():
             try:
                 if port is None:
-                    
                     self.signal_handler.status_update.emit("Auto-detecting NanoVNA...")
                     ports = list(serial.tools.list_ports.comports())
                     
@@ -882,7 +879,6 @@ class MainWindow(QMainWindow):
                     
                     self.signal_handler.status_update.emit(f"Connected to NanoVNA on {port}")
                 
-                    
             except Exception as e:
                 self.signal_handler.error_occurred.emit("Connection Error", str(e))
         
@@ -904,7 +900,8 @@ class MainWindow(QMainWindow):
                 stop = float(self.end_frequency.text() or "10000000")
                 points = int(self.sweep_points.text() or "201")
                 
-                if self.btn_combobox is "S11":
+                # Fixed string comparison issue
+                if self.btn_combobox.currentText() == "S11 (1-Port)":
                     try:
                         # Perform sweep and acquire data
                         if self.vna.sweep(start, stop, points):
@@ -952,17 +949,12 @@ class MainWindow(QMainWindow):
                     except Exception as e:
                         self.signal_handler.error_occurred.emit("Sweep Error", str(e))
                         
-                    threading.Thread(target=sweep_worker, daemon=True).start()
-                    self.statusBar().showMessage("Performing single sweep...", 2000)
-                        
-                            
             except Exception as e:
-                        self.signal_handler.error_occurred.emit("Sweep Error", str(e))
+                self.signal_handler.error_occurred.emit("Sweep Error", str(e))
                 
-                
-                
-                
-                
+        # Fixed indentation issue
+        threading.Thread(target=sweep_worker, daemon=True).start()
+        self.statusBar().showMessage("Performing single sweep...", 2000)
 
     def start_logging_button(self):
         """Start continuous data logging."""
@@ -972,8 +964,6 @@ class MainWindow(QMainWindow):
         
         if self.acquisition_active:
             return
-        
-        # connection with initial sweep
         
         try:
             start = float(self.start_frequency.text() or "1000000")
@@ -991,7 +981,6 @@ class MainWindow(QMainWindow):
         except ValueError:
             QMessageBox.warning(self, "Input Error", "Invalid sweep parameters")
             return
-        
         
         # Start acquisition thread
         self.acquisition_active = True
@@ -1016,10 +1005,11 @@ class MainWindow(QMainWindow):
         try:
             interval = float(self.interval.currentText())
         except (ValueError, AttributeError):
-            interval=2
+            interval = 2
         
         while self.acquisition_active and not self.acquisition_stop_flag.is_set():
-            if self.btn_combobox is "S11":
+            # Fixed string comparison issue
+            if self.btn_combobox.currentText() == "S11 (1-Port)":
                 try:
                     # Perform sweep and acquire data
                     if self.vna.sweep(start_freq, stop_freq, points):
@@ -1080,8 +1070,6 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     self.signal_handler.error_occurred.emit("Acquisition Error", str(e))
                     break
-                
-            
         
         self.acquisition_active = False
 
@@ -1103,7 +1091,6 @@ class MainWindow(QMainWindow):
         self.act_stop.setEnabled(False)
         
         self.statusBar().showMessage("Logging stopped", 3000)
-
 
     # Inserting the table
 
@@ -1169,7 +1156,6 @@ class MainWindow(QMainWindow):
             self.update_plot()
             
     def delete_table(self):
-    
         if self.data.empty:
             QMessageBox.warning(self, "Warning", "There is no Data Table to delete")
             return
@@ -1180,7 +1166,6 @@ class MainWindow(QMainWindow):
         )
         
         if confirm == QMessageBox.StandardButton.Yes:
-            
             self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Magnitude(Ω)", "Phase(°)"])
             self.table_model.set_dataframe(self.data)
             self.table_view.resizeColumnsToContents()
@@ -1206,7 +1191,6 @@ class MainWindow(QMainWindow):
             self.update_plot()
         except Exception as e:
             QMessageBox.warning(self, "File Error", str(e))
-
 
     # Plot update
 
@@ -1236,7 +1220,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Plot Error", str(e))
 
-
     # Export data into table as csv files
     
     def export_csv(self):
@@ -1265,23 +1248,20 @@ class MainWindow(QMainWindow):
                 QToolBar { background: #2a2a2a; }
                 QStatusBar { background: #252525; color: #cfcfcf; }
             """)
-            self.plot_widget.axes.set_facecolor("#c41c1c")
-            self.multiplot.axes_Cm.set_facecolor("#c41c1c")
-            self.multiplot.axes_Rm.set_facecolor("#c41c1c")
-            self.multiplot.axes_Lm.set_facecolor("#c41c1c")
-            self.multiplot.axes_Fs.set_facecolor("#c41c1c")
-            self.multiplot.draw()
+            self.plot_widget.axes.set_facecolor("#1c1c1c")
+            if hasattr(self, 'multiplot') and self.multiplot:
+                self.multiplot.axes_Cm.set_facecolor("#1c1c1c")
+                self.multiplot.axes_Rm.set_facecolor("#1c1c1c")
+                self.multiplot.axes_Lm.set_facecolor("#1c1c1c")
+                self.multiplot.axes_Fs.set_facecolor("#1c1c1c")
+                self.multiplot.draw()
             self.plot_widget.draw()
         else:
             self.setStyleSheet("")
             self.plot_widget.axes.set_facecolor('w')
             self.plot_widget.draw()
-            
-
 
     # Analysis windows & calculators
-
-        
 
     def sauerbrey_konazawa(self):
         """Open Sauerbrey & Konazawa analysis window"""
@@ -1300,17 +1280,13 @@ class MainWindow(QMainWindow):
             self.sauerbrey_win.resize(800, 600)
             self.sauerbrey_win.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             
-
             main_layout = QVBoxLayout(self.sauerbrey_win)
-            
-           
             tab_widget = QTabWidget()
             
-     
+            # Sauerbrey tab
             sauerbrey_tab = QWidget()
             sauerbrey_layout = QVBoxLayout(sauerbrey_tab)
             
-
             sauerbrey_group = QGroupBox("Sauerbrey Parameters")
             sauerbrey_form = QFormLayout()
             
@@ -1347,7 +1323,7 @@ class MainWindow(QMainWindow):
             
             # Calculate button
             calc_btn = QPushButton("Calculate Mass Change")
-            calc_btn.clicked.connect(lambda: self.calculate_sauerbrey_mass(sauerbrey))
+            calc_btn.clicked.connect(self.calculate_sauerbrey_mass)
             calc_layout.addWidget(calc_btn)
             
             # Results
@@ -1370,6 +1346,7 @@ class MainWindow(QMainWindow):
             # Add Sauerbrey tab
             tab_widget.addTab(sauerbrey_tab, "Sauerbrey Analysis")
             
+            # Konazawa tab
             konazawa_tab = QWidget()
             konazawa_layout = QVBoxLayout(konazawa_tab)
             
@@ -1379,8 +1356,7 @@ class MainWindow(QMainWindow):
             self.konaz_f0 = QLineEdit("5000000")  # 5 MHz default
             self.konaz_p = QLineEdit("2650")  # Quartz density kg/m³
             self.konaz_u = QLineEdit("2.947e10")  # Shear Modulus of quartz in Pascals
-            self.konaz_p1 = QLineEdit("1000")  # Liquid density kg/m³, can be editable, if any other liqid used
-
+            self.konaz_p1 = QLineEdit("1000")  # Liquid density kg/m³, can be editable, if any other liquid used
             
             konazawa_form.addRow("Initial Frequency f₀ (Hz):", self.konaz_f0)
             konazawa_form.addRow("Quartz Density p (kg/m³):", self.konaz_p)
@@ -1407,7 +1383,7 @@ class MainWindow(QMainWindow):
             konaz_calc_layout.addWidget(konaz_detect_freq_btn)
             
             konaz_calc_btn = QPushButton("Calculate Konazawa")
-            konaz_calc_btn.clicked.connect(lambda: self.calculate_konazawa_result(konazawa))
+            konaz_calc_btn.clicked.connect(self.calculate_konazawa_result)
             konaz_calc_layout.addWidget(konaz_calc_btn)
             
             # Results
@@ -1424,39 +1400,41 @@ class MainWindow(QMainWindow):
             konaz_calc_group.setLayout(konaz_calc_layout)
             konazawa_layout.addWidget(konaz_calc_group)
             
-
             tab_widget.addTab(konazawa_tab, "Konazawa Analysis")
             
-            phase_shift = QWidget()
-            
-            phase_layout = QVBoxLayout(phase_shift)
-            
-            phase_group = QGroupBox("Konazawa Parameters")
+            # Phase shift tab 
+            phase_shift_tab = QWidget()
+            phase_layout = QVBoxLayout(phase_shift_tab)
+            phase_grp = QGroupBox()
             phase_form = QFormLayout()
             
-            Cm, Rm, Lm, Reff, delta_f = phaseshiftcalculation(fs, f1, f2, s21_logmag)
-            
-            self.phase_Cm = Cm
-            self.phase_Rm = Rm
-            self.phase_Lm = Lm
-            self.phase_deltaf = delta_f
-            self.phase_Reff = Reff
+            vna = NanoVNA()
 
+            freqs, s21_values, *_ = vna.acquire_s21()
+
+            #Phase shift analysis
+            method = phaseshiftmethod()
+            phase_deg, s21, s21_db = method.phaseshift(s21_values)
+            results = method.phaseshiftfrequency(freqs, phase_deg, s21_db)
+            Cm, Rm, Lm, Reff, delta_f = method.phaseshiftcalculation(results)
+
+                
+            #Show calculated values
+            phase_form.addRow(QLabel(f"Rm = {Rm:.4f} Ω"))
+            phase_form.addRow(QLabel(f"Reff = {Reff:.4f} Ω"))
+            phase_form.addRow(QLabel(f"Cm = {Cm:.4e} F"))
+            phase_form.addRow(QLabel(f"Lm = {Lm:.4e} H"))
             
-            phase_form.addRow("Motional Resistance", self.phase_Rm)
-            phase_form.addRow("Motional capcitance:", self.phase_Cm)
-            phase_form.addRow("Motional Inductance:", self.phase_Lm)
-            phase_form.addRow("Frequency(△f)", self.phase_deltaf)
-            phase_form.addRow("Effective Resistance", self.phase_Reff)
+            phase_grp.setLayout(phase_form)
+   
+            phase_layout.addWidget(phase_grp)
             
-            phase_group.setLayout(phase_form)
-            phase_layout.addWidget(phase_group)
+            tab_widget.addTab(phase_shift_tab, "Phase Shift")
             
-            tab_widget.addWidget(phase_shift, "Phase Shift")
             
-  
             main_layout.addWidget(tab_widget)
-       
+            
+            # Auto-detect frequencies on startup
             self.auto_detect_frequency('both')
             
             # Show the window
@@ -1491,7 +1469,6 @@ class MainWindow(QMainWindow):
             
             # Create impedance array
             impedance = resist + 1j * react
-
             
             # Get resonant frequency using your parameter functions
             ft_sauer = sauer_param(freqs, impedance)
@@ -1513,7 +1490,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Detection Error", f"Error detecting frequency: {str(e)}")
 
-    def calculate_sauerbrey_mass(self, sauerbrey_func):
+    def calculate_sauerbrey_mass(self):
         """Calculate mass change using your Sauerbrey function"""
         try:
             # Get parameters
@@ -1531,7 +1508,7 @@ class MainWindow(QMainWindow):
             ft = float(ft_text)
             
             # Calculate using your Sauerbrey function: sauerbrey(f0, p, u, ft, A)
-            mass_change = sauerbrey_func(f0, p, u, ft, A)
+            mass_change = sauerbrey(f0, p, u, ft, A)
             freq_shift = f0 - ft
             
             # Calculate mass per unit area in ng/cm²
@@ -1552,13 +1529,13 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Calculation Error", f"Error calculating Sauerbrey: {e}")
 
-    def calculate_konazawa_result(self, konazawa_func):
+    def calculate_konazawa_result(self):
         """Calculate result using your Konazawa function"""
         try:
             # Get parameters
             f0 = float(self.konaz_f0.text())
             p = float(self.konaz_p.text())    # quartz density
-            u = float(self.konaz_u.text())   # viscosity
+            u = float(self.konaz_u.text())   # shear modulus
             p1 = float(self.konaz_p1.text()) # liquid density
             
             # Get current frequency
@@ -1570,7 +1547,7 @@ class MainWindow(QMainWindow):
             ft = float(ft_text)
             
             # Calculate using your Konazawa function: konazawa(f0, p, u, ft, p1)
-            konaz_result = konazawa_func(f0, p, u, ft, p1)
+            konaz_result = konazawa(f0, p, u, ft, p1)
             freq_shift = f0 - ft
             
             # Update results
@@ -1585,12 +1562,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Input Error", f"Invalid input parameters: {e}")
         except Exception as e:
             QMessageBox.warning(self, "Calculation Error", f"Error calculating Konazawa: {e}")
-            
-        #Crystallization dynamics using BVD model
 
+    # Crystallization dynamics using BVD model
     def crystallizationdynamics(self):
         try:
-           
             if hasattr(self, 'cryst_dyn_win') and self.cryst_dyn_win is not None:
                 try:
                     self.cryst_dyn_win.close()
@@ -1621,7 +1596,6 @@ class MainWindow(QMainWindow):
             left_layout = QVBoxLayout(left_widget)
             left_layout.setContentsMargins(0, 0, 0, 0)
             
-            
             self.multiplot = MplMultiCanvas(self, width=8, height=6, dpi=100)
             multi_toolbar = NavigationToolbar(self.multiplot, self.cryst_dyn_win)
             left_layout.addWidget(multi_toolbar)
@@ -1642,7 +1616,6 @@ class MainWindow(QMainWindow):
             self.multiplot.axes_Cm.set_xlabel("Time(s)")
             self.multiplot.axes_Cm.set_ylabel("Cm(F)")
             
-            
             left_layout.addWidget(self.multiplot)
             splitter.addWidget(left_widget)
 
@@ -1651,7 +1624,6 @@ class MainWindow(QMainWindow):
             right_layout = QVBoxLayout(right_widget)
             group_box = QGroupBox("Latest BVD Parameters")
             form = QFormLayout()
-            
             
             if not hasattr(self, 'rm_edit'):
                 self.rm_edit = QLineEdit()
@@ -1691,7 +1663,7 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             QMessageBox.warning(self, "Window Error", str(e))
-            
+
     def fit_data(self):
         """Fit BVD parameters to current data"""
         try:
@@ -1736,7 +1708,7 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             QMessageBox.warning(self, "Fit Error", str(e))
-            
+
     def plotcrystallization(self):
         """Extract sweep-by-sweep BVD params and update dynamics plots."""
         try:
@@ -1804,7 +1776,8 @@ class MainWindow(QMainWindow):
             self.rm_edit.setText(f"{rm_values[-1]:.6f}")
             self.lm_edit.setText(f"{lm_values[-1]:.6e}")
             self.cm_edit.setText(f"{cm_values[-1]:.6e}")
-            self.c0_edit.setText(f"{C0:.6e}" if 'C0' in locals() else "")
+            if 'C0' in locals():
+                self.c0_edit.setText(f"{C0:.6e}")
             self.f_edit.setText(f"{fs_values[-1]:.2f}")
 
             # Plot
@@ -1828,7 +1801,6 @@ class MainWindow(QMainWindow):
     def Viewtable(self):
         """Show computed dynamics table in a separate window."""
         try:
-            
             if not hasattr(self, 'crystdynamics') or self.crystdynamics.empty:
                 QMessageBox.warning(self, "No Data", "Run dynamics analysis first.")
                 return
@@ -1844,14 +1816,12 @@ class MainWindow(QMainWindow):
             layout.addWidget(table)
             table_win.show()
             
-            
             self.table_win = table_win
             
         except Exception as e:
             QMessageBox.warning(self, "Table Error", str(e))
-            
-    #Crystallization kinetics (Avrami)
 
+    # Crystallization kinetics (Avrami)
     def crystallizationkinetics(self):
         try:
             if hasattr(self, 'cryst_kin_win') and self.cryst_kin_win is not None:
@@ -1945,7 +1915,7 @@ class MainWindow(QMainWindow):
                 self.k_edit.setText(f"{k:.3e}")
                 self.n_edit.setText(f"{n:.3f}")
                 X_fit = avrami_formula(k, n, t_seconds)
-                self.plot_crystallization_fraction.axes.plot(t_seconds, X_fit, 'r')
+                self.plot_crystallization_fraction.axes.plot(t_seconds, X_fit, 'r-')
                 self.plot_crystallization_fraction.draw()
             except Exception as e:
                 QMessageBox.warning(self, "Fit Error", str(e))
@@ -1962,9 +1932,9 @@ class MainWindow(QMainWindow):
             if not fname:
                 return
             df.to_csv(fname, index=False)
-            self.statusBar().showMessage(f"Saved {len(df)} rows to {fname}", 6000)
+            self
         except Exception as e:
-            QMessageBox.warning(self, "Export Error", str(e))
+            QMessageBox.warning(self, "Exporting Error", str(e))
 
     # ---------------------------
     # Cleanup on close

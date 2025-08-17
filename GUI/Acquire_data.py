@@ -309,11 +309,6 @@ class NanoVNA:
             return complex(float('inf'), float('inf'))
         return self.z0 * 2 * (1-s21)/s21
     
-    def s21_to_impedance_parallel(self, s21):
-        """Convert s21 to impedance in parallel"""
-        if abs(s21) < 1e-10:
-            return complex(float('inf'), float('inf'))
-        return self.z0 * s21 /(2*(1-s21))
             
     
     def get_frequencies(self, num_points=None):
