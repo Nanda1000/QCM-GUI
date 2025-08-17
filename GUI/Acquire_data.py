@@ -303,6 +303,19 @@ class NanoVNA:
             return complex(float('inf'), float('inf'))
         return self.z0 * (1 + s11) / (1 - s11)
     
+    def s21_to_impedance(self, s21):
+        """Convert S21 to impedance"""
+        if abs(s21) < 1e-10:
+            return complex(float('inf'), float('inf'))
+        return self.z0 * 2 * (1-s21)/s21
+    
+    def s21_to_impedance_parallel(self, s21):
+        """Convert s21 to impedance in parallel"""
+        if abs(s21) < 1e-10:
+            return complex(float('inf'), float('inf'))
+        return self.z0 * s21 /(2*(1-s21))
+            
+    
     def get_frequencies(self, num_points=None):
         """Get frequency array based on current sweep settings"""
         if num_points is None:
@@ -398,8 +411,8 @@ class NanoVNA:
             print(f"[ERROR] Failed to set sweep: {e}")
             return False
     
-    def acquire(self, get_s21=False):
-        """Acquire S11 data and optionally S21 data, convert S11 to impedance"""
+    def acquire(self):
+        """Acquire S11 data and convert S11 to impedance"""
         try:
             # Get S11 data (data 0)
             raw_lines_s11 = self.get_data(0)
@@ -428,23 +441,46 @@ class NanoVNA:
             print(f"[INFO] Acquired {len(s11_values)} S11 measurements")
             print(f"[INFO] Frequency range: {freqs[0]/1e6:.3f} MHz to {freqs[-1]/1e6:.3f} MHz")
             
-            # Optionally get S21 data
-            s21_values = None
-            freqs_s21 = None
-            if get_s21:
-                raw_lines_s21 = self.get_data(1)
-                if raw_lines_s21:
-                    s21_values = self.parse_s21_data(raw_lines_s21)
-                    if s21_values:
-                        freqs_s21 = self.get_frequencies(len(s21_values))
-                        print(f"[INFO] Acquired {len(s21_values)} S21 measurements")
-                    else:
-                        print("[WARNING] No valid S21 values parsed")
-                else:
-                    print("[WARNING] No S21 data received")
             
-            return freqs, s11_values, impedances, resistance, reactance, magnitude, phase, s21_values, freqs_s21
             
+            return freqs, s11_values, impedances, resistance, reactance, magnitude, phase
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to acquire data: {e}")
+            return None, None, None, None, None, None, None, None, None
+        
+    def acquire_s21(self):
+        try:
+            # Get S21 data (data 1)
+            raw_lines_s21 = self.get_data(1)
+            
+            if not raw_lines_s21:
+                print("[ERROR] No S21 data received")
+                return None, None, None, None, None, None, None, None, None
+            
+            # Parse S21 values
+            s21_values = self.parse_s21_data(raw_lines_s21)
+            
+            if not s21_values:
+                print("[ERROR] No valid S21 values parsed")
+                return None, None, None, None, None, None, None, None, None
+            
+            # Generate frequency array
+            freqs = self.get_frequencies(len(s21_values))
+            
+            # Convert S11 to impedances
+            impedances = np.array([self.s21_to_impedance(s) for s in s21_values])
+            resistance = impedances.real
+            reactance = impedances.imag
+            magnitude = np.abs(impedances)
+            phase = np.angle(impedances, deg=True)
+            
+            print(f"[INFO] Acquired {len(s21_values)} S21 measurements")
+            print(f"[INFO] Frequency range: {freqs[0]/1e6:.3f} MHz to {freqs[-1]/1e6:.3f} MHz")
+            
+            
+            
+            return freqs, s21_values, impedances, resistance, reactance, magnitude, phase
         except Exception as e:
             print(f"[ERROR] Failed to acquire data: {e}")
             return None, None, None, None, None, None, None, None, None

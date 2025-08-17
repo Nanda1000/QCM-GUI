@@ -23,7 +23,7 @@ There are some key formulas to use, Below are the ones
 """
 
 def butterworth(fs, Rm, Lm, Cm, C0):
-    #frequency need to be entered as the value can be obtained from where impedance is minimum  is magnitude of S11
+    #frequency need to be entered as the value can be obtained from where impedance is minimum or maximum  is magnitude of S21 ans S11
     
     w = 2 * np.pi * fs
     j = 1j
@@ -44,7 +44,7 @@ def butterworth(fs, Rm, Lm, Cm, C0):
 
     Y = np.where(Y == 0, 1e-12, Y)
     Z_tot = 1/Y
-    return Z_tot
+    return Z_tot, Zm
 
     
 """Interpolation done to find the points crossed for qualify factor or to find the frequency points"""
@@ -89,9 +89,18 @@ def parameter(freqs, impedance, Resistance=None):
     except Exception as e:
         raise RuntimeError(f"Spline fitting failed: {e}")
 
-    min_index = np.argmin(fine_Z1)
-    fs = fine_freqs[min_index]
-    f = fs
+    min_index = np.argmin(Z1)
+    fs = freqs[min_index]
+    
+    max_index = np.argmax(Z1)
+    fp = freqs[max_index]
+    
+    if Z1[min_index] < Z1[max_index]:
+        f = fs
+        return f
+    else:
+        fp = fp
+        return fp
 
 
     # Find nearest real value for fs and Rm

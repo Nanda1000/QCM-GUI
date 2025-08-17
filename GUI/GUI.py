@@ -12,6 +12,7 @@ from Acquire_data import NanoVNA
 import serial.tools.list_ports
 import numpy as np
 import pandas as pd
+from Models.phaseshift import phaseshiftmethod
 
 from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex, pyqtSignal, QObject
 from PyQt6.QtGui import QAction, QIcon
@@ -29,6 +30,9 @@ from Models.konazawa import konazawa, parameter_konazawa as konaz_param
 #Matplotlib
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qtagg import (
+  NavigationToolbar2QT as NavigationToolbar,
+)
 #ReportLab pdf
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 from reportlab.lib import colors
@@ -212,6 +216,10 @@ class MainWindow(QMainWindow):
         self.poll_timer.setInterval(2000)
         self.poll_timer.timeout.connect(self.run_single_sweep)
 
+        
+
+        
+
         try:
             import pyvisa
             self.pyvisa_rm = pyvisa.ResourceManager()
@@ -355,6 +363,13 @@ class MainWindow(QMainWindow):
         self.btn_connect.clicked.connect(self.connect_to_instrument)
         self.btn_single = QPushButton("Single Sweep")
         self.btn_single.clicked.connect(self.run_single_sweep)
+        self.btn_combobox = QComboBox()
+        self.btn_combobox.addItems(["S11 (1-Port)", "S21 (2-port)"])
+        self.btn_combobox2 = QComboBox()
+        self.btn_combobox2.addItems(["Series Set-Up", "Parallel Set-Up"])
+        btns.addWidget(self.btn_combobox)
+        btns.addWidget(self.btn_combobox2)
+        
         btns.addWidget(self.btn_connect)
         btns.addWidget(self.btn_single)
         acq_layout.addLayout(btns)
@@ -392,7 +407,7 @@ class MainWindow(QMainWindow):
         # Analysis
         analysis_grp = QGroupBox("Analysis Tools")
         an_layout = QVBoxLayout()
-        self.btn_sauer = QPushButton("Sauerbrey / Konazawa")
+        self.btn_sauer = QPushButton("Sauerbrey / Konazawa / PhaseShift")
         self.btn_sauer.clicked.connect(self.sauerbrey_konazawa)
         self.btn_cryst_dyn = QPushButton("Crystallization Dynamics")
         self.btn_cryst_dyn.clicked.connect(self.crystallizationdynamics)
@@ -449,6 +464,9 @@ class MainWindow(QMainWindow):
         self.plot_widget.axes.set_xlabel("Frequency(Hz)")
         self.plot_widget.axes.set_ylabel("Resistance(Ω)")
         self.plot_widget.axes.plot(self.freqs, np.zeros_like(self.freqs), 'b-')
+        
+        self.plot_toolbar = NavigationToolbar(self.plot_widget, self)
+        plot_layout.addWidget(self.plot_toolbar)
         self.plot_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         plot_layout.addWidget(self.plot_widget)
         right_splitter.addWidget(plot_frame)
@@ -886,30 +904,65 @@ class MainWindow(QMainWindow):
                 stop = float(self.end_frequency.text() or "10000000")
                 points = int(self.sweep_points.text() or "201")
                 
-                # Perform sweep and acquire data
-                if self.vna.sweep(start, stop, points):
-                    result = self.vna.acquire()
-                    
-                    if result[0] is not None:  # Check if frequencies are available
-                        freqs, s11_values, impedances, resistance, reactance, magnitude, phase = result
+                if self.btn_combobox is "S11":
+                    try:
+                        # Perform sweep and acquire data
+                        if self.vna.sweep(start, stop, points):
+                            result = self.vna.acquire()
+                            
+                            if result[0] is not None:  # Check if frequencies are available
+                                freqs, s11_values, impedances, resistance, reactance, magnitude, phase = result
+                                
+                                data_package = {
+                                    "timestamp": pd.Timestamp.now(),
+                                    "scan_count": 1,
+                                    "frequencies": freqs,
+                                    "impedance": impedances
+                                }
+                                self.signal_handler.data_received.emit(data_package)
+                            else:
+                                self.signal_handler.error_occurred.emit("Sweep Error", "No data received from sweep")
+                        else:
+                            self.signal_handler.error_occurred.emit("Sweep Error", "Failed to set up sweep")
+                            
+                    except Exception as e:
+                        self.signal_handler.error_occurred.emit("Sweep Error", str(e))
                         
-                        data_package = {
-                            "timestamp": pd.Timestamp.now(),
-                            "scan_count": 1,
-                            "frequencies": freqs,
-                            "impedance": impedances
-                        }
-                        self.signal_handler.data_received.emit(data_package)
-                    else:
-                        self.signal_handler.error_occurred.emit("Sweep Error", "No data received from sweep")
                 else:
-                    self.signal_handler.error_occurred.emit("Sweep Error", "Failed to set up sweep")
+                    try:
+                        # Perform sweep and acquire data
+                        if self.vna.sweep(start, stop, points):
+                            result = self.vna.acquire_s21()
+                            
+                            if result[0] is not None:  # Check if frequencies are available
+                                freqs, s21_values, impedances, resistance, reactance, magnitude, phase = result
+                                
+                                data_package = {
+                                    "timestamp": pd.Timestamp.now(),
+                                    "scan_count": 1,
+                                    "frequencies": freqs,
+                                    "impedance": impedances
+                                }
+                                self.signal_handler.data_received.emit(data_package)
+                            else:
+                                self.signal_handler.error_occurred.emit("Sweep Error", "No data received from sweep")
+                        else:
+                            self.signal_handler.error_occurred.emit("Sweep Error", "Failed to set up sweep")
                     
+                    except Exception as e:
+                        self.signal_handler.error_occurred.emit("Sweep Error", str(e))
+                        
+                    threading.Thread(target=sweep_worker, daemon=True).start()
+                    self.statusBar().showMessage("Performing single sweep...", 2000)
+                        
+                            
             except Exception as e:
-                self.signal_handler.error_occurred.emit("Sweep Error", str(e))
-        
-        threading.Thread(target=sweep_worker, daemon=True).start()
-        self.statusBar().showMessage("Performing single sweep...", 2000)
+                        self.signal_handler.error_occurred.emit("Sweep Error", str(e))
+                
+                
+                
+                
+                
 
     def start_logging_button(self):
         """Start continuous data logging."""
@@ -966,35 +1019,69 @@ class MainWindow(QMainWindow):
             interval=2
         
         while self.acquisition_active and not self.acquisition_stop_flag.is_set():
-            try:
-                # Perform sweep and acquire data
-                if self.vna.sweep(start_freq, stop_freq, points):
-                    result = self.vna.acquire()
-                    
-                    if result[0] is not None:  # Check if frequencies are available
-                        freqs, s11_values, impedances, resistance, reactance, magnitude, phase = result
-                        scan_count += 1
+            if self.btn_combobox is "S11":
+                try:
+                    # Perform sweep and acquire data
+                    if self.vna.sweep(start_freq, stop_freq, points):
+                        result = self.vna.acquire()
                         
-                        data_package = {
-                            "timestamp": pd.Timestamp.now(),
-                            "scan_count": scan_count,
-                            "frequencies": freqs,
-                            "impedance": impedances
-                        }
-                        self.signal_handler.data_received.emit(data_package)
+                        if result[0] is not None:  # Check if frequencies are available
+                            freqs, s11_values, impedances, resistance, reactance, magnitude, phase = result
+                            scan_count += 1
+                            
+                            data_package = {
+                                "timestamp": pd.Timestamp.now(),
+                                "scan_count": scan_count,
+                                "frequencies": freqs,
+                                "impedance": impedances
+                            }
+                            self.signal_handler.data_received.emit(data_package)
+                        else:
+                            self.signal_handler.error_occurred.emit("Acquisition Error", "No data received from sweep")
                     else:
-                        self.signal_handler.error_occurred.emit("Acquisition Error", "No data received from sweep")
-                else:
-                    self.signal_handler.error_occurred.emit("Acquisition Error", "Failed to set up sweep")
-                
-                for _ in range(int(interval * 10)):
-                    if self.acquisition_stop_flag.is_set():
-                        break
-                    time.sleep(0.1)
+                        self.signal_handler.error_occurred.emit("Acquisition Error", "Failed to set up sweep")
                     
-            except Exception as e:
-                self.signal_handler.error_occurred.emit("Acquisition Error", str(e))
-                break
+                    for _ in range(int(interval * 10)):
+                        if self.acquisition_stop_flag.is_set():
+                            break
+                        time.sleep(0.1)
+                        
+                except Exception as e:
+                    self.signal_handler.error_occurred.emit("Acquisition Error", str(e))
+                    break
+                
+            else:
+                try:
+                    # Perform sweep and acquire data
+                    if self.vna.sweep(start_freq, stop_freq, points):
+                        result = self.vna.acquire_s21()
+                        
+                        if result[0] is not None:  # Check if frequencies are available
+                            freqs, s21_values, impedances, resistance, reactance, magnitude, phase = result
+                            scan_count += 1
+                            
+                            data_package = {
+                                "timestamp": pd.Timestamp.now(),
+                                "scan_count": scan_count,
+                                "frequencies": freqs,
+                                "impedance": impedances
+                            }
+                            self.signal_handler.data_received.emit(data_package)
+                        else:
+                            self.signal_handler.error_occurred.emit("Acquisition Error", "No data received from sweep")
+                    else:
+                        self.signal_handler.error_occurred.emit("Acquisition Error", "Failed to set up sweep")
+                    
+                    for _ in range(int(interval * 10)):
+                        if self.acquisition_stop_flag.is_set():
+                            break
+                        time.sleep(0.1)
+                        
+                except Exception as e:
+                    self.signal_handler.error_occurred.emit("Acquisition Error", str(e))
+                    break
+                
+            
         
         self.acquisition_active = False
 
@@ -1194,6 +1281,8 @@ class MainWindow(QMainWindow):
 
     # Analysis windows & calculators
 
+        
+
     def sauerbrey_konazawa(self):
         """Open Sauerbrey & Konazawa analysis window"""
         try:
@@ -1337,6 +1426,33 @@ class MainWindow(QMainWindow):
             
 
             tab_widget.addTab(konazawa_tab, "Konazawa Analysis")
+            
+            phase_shift = QWidget()
+            
+            phase_layout = QVBoxLayout(phase_shift)
+            
+            phase_group = QGroupBox("Konazawa Parameters")
+            phase_form = QFormLayout()
+            
+            Cm, Rm, Lm, Reff, delta_f = phaseshiftcalculation(fs, f1, f2, s21_logmag)
+            
+            self.phase_Cm = Cm
+            self.phase_Rm = Rm
+            self.phase_Lm = Lm
+            self.phase_deltaf = delta_f
+            self.phase_Reff = Reff
+
+            
+            phase_form.addRow("Motional Resistance", self.phase_Rm)
+            phase_form.addRow("Motional capcitance:", self.phase_Cm)
+            phase_form.addRow("Motional Inductance:", self.phase_Lm)
+            phase_form.addRow("Frequency(△f)", self.phase_deltaf)
+            phase_form.addRow("Effective Resistance", self.phase_Reff)
+            
+            phase_group.setLayout(phase_form)
+            phase_layout.addWidget(phase_group)
+            
+            tab_widget.addWidget(phase_shift, "Phase Shift")
             
   
             main_layout.addWidget(tab_widget)
@@ -1507,6 +1623,8 @@ class MainWindow(QMainWindow):
             
             
             self.multiplot = MplMultiCanvas(self, width=8, height=6, dpi=100)
+            multi_toolbar = NavigationToolbar(self.multiplot, self.cryst_dyn_win)
+            left_layout.addWidget(multi_toolbar)
             
             self.multiplot.axes_Rm.set_title("Motional Resistance vs time")
             self.multiplot.axes_Rm.set_xlabel("Time(s)")
@@ -1755,6 +1873,8 @@ class MainWindow(QMainWindow):
             left_widget = QWidget()
             left_layout = QVBoxLayout(left_widget)
             self.plot_crystallization_fraction = MplCanvas(self, width=5, height=4, dpi=100)
+            kinetics_toolbar = NavigationToolbar(self.plot_crystallization_fraction, self.cryst_kin_win)
+            left_layout.addWidget(kinetics_toolbar)
             self.plot_crystallization_fraction.axes.set_title("Crystallinity vs Time")
             self.plot_crystallization_fraction.axes.set_ylabel("X(t)")
             self.plot_crystallization_fraction.axes.set_xlabel("Time (s)")
