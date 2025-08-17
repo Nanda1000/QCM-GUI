@@ -1403,31 +1403,37 @@ class MainWindow(QMainWindow):
             tab_widget.addTab(konazawa_tab, "Konazawa Analysis")
             
             # Phase shift tab 
+            # Phase shift tab 
             phase_shift_tab = QWidget()
             phase_layout = QVBoxLayout(phase_shift_tab)
-            phase_grp = QGroupBox()
+            phase_grp = QGroupBox("Phase Shift Analysis")
             phase_form = QFormLayout()
-            
-            vna = NanoVNA()
 
-            freqs, s21_values, *_ = vna.acquire_s21()
+            # Add input fields and button instead of immediate calculation
+            phase_form.addRow(QLabel("Connect to NanoVNA and run a measurement first"))
 
-            #Phase shift analysis
-            method = phaseshiftmethod()
-            phase_deg, s21, s21_db = method.phaseshift(s21_values)
-            results = method.phaseshiftfrequency(freqs, phase_deg, s21_db)
-            Cm, Rm, Lm, Reff, delta_f = method.phaseshiftcalculation(results)
+            self.phase_calc_btn = QPushButton("Calculate Phase Shift Parameters")
+            self.phase_calc_btn.clicked.connect(self.calculate_phase_shift)
+            phase_form.addRow(self.phase_calc_btn)
 
-                
-            #Show calculated values
-            phase_form.addRow(QLabel(f"Rm = {Rm:.4f} Ω"))
-            phase_form.addRow(QLabel(f"Reff = {Reff:.4f} Ω"))
-            phase_form.addRow(QLabel(f"Cm = {Cm:.4e} F"))
-            phase_form.addRow(QLabel(f"Lm = {Lm:.4e} H"))
-            
+            # Result display fields
+            self.phase_rm_result = QLineEdit()
+            self.phase_rm_result.setReadOnly(True)
+            self.phase_reff_result = QLineEdit()
+            self.phase_reff_result.setReadOnly(True)
+            self.phase_cm_result = QLineEdit()
+            self.phase_cm_result.setReadOnly(True)
+            self.phase_lm_result = QLineEdit()
+            self.phase_lm_result.setReadOnly(True)
+
+            phase_form.addRow("Rm (Ω):", self.phase_rm_result)
+            phase_form.addRow("Reff (Ω):", self.phase_reff_result)
+            phase_form.addRow("Cm (F):", self.phase_cm_result)
+            phase_form.addRow("Lm (H):", self.phase_lm_result)
+
             phase_grp.setLayout(phase_form)
-   
             phase_layout.addWidget(phase_grp)
+
             
             tab_widget.addTab(phase_shift_tab, "Phase Shift")
             
@@ -1444,6 +1450,59 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Import Error", f"Could not import required modules: {str(e)}\nMake sure Models/Sauerbrey.py and Models/konazawa.py are available.")
         except Exception as e:
             QMessageBox.warning(self, "Window Error", f"Error opening Sauerbrey/Konazawa window: {str(e)}")
+            
+    def calculate_phase_shift(self):
+        """Calculate phase shift parameters from current data"""
+        try:
+            if not self._is_vna_connected():
+                QMessageBox.warning(self, "Connection Error", "Please connect to NanoVNA first")
+                return
+                
+            if self.data.empty:
+                QMessageBox.warning(self, "No Data", "Please run a sweep first.")
+                return
+            
+            # Get the latest sweep data
+            points = int(self.sweep_points.text() or 201)
+            if len(self.data) < points:
+                QMessageBox.warning(self, "Insufficient Data", "Please run a complete sweep first")
+                return
+            try:
+                if self.vna.sweep(float(self.start_frequency.text() or "1000000"), 
+                                float(self.end_frequency.text() or "10000000"), 
+                                points):
+                    result = self.vna.acquire_s21()
+                    
+                    if result[0] is not None:
+                        freqs, s21_values, *_ = result
+                        
+                        # Phase shift analysis
+                        from Models.phaseshift import phaseshiftmethod
+                        method = phaseshiftmethod()
+                        phase_deg, s21, s21_db = method.phaseshift(s21_values)
+                        results = method.phaseshiftfrequency(freqs, phase_deg, s21_db)
+                        Cm, Rm, Lm, Reff, delta_f = method.phaseshiftcalculation(results)
+                        
+                        # Update result fields
+                        self.phase_rm_result.setText(f"{Rm:.6f}")
+                        self.phase_reff_result.setText(f"{Reff:.6f}")
+                        self.phase_cm_result.setText(f"{Cm:.6e}")
+                        self.phase_lm_result.setText(f"{Lm:.6e}")
+                        
+                        QMessageBox.information(self, "Phase Shift Analysis Complete", 
+                                            f"Phase shift parameters calculated successfully")
+                    else:
+                        QMessageBox.warning(self, "Data Error", "No S21 data received from NanoVNA")
+                else:
+                    QMessageBox.warning(self, "Sweep Error", "Failed to perform sweep")
+                    
+            except ImportError:
+                QMessageBox.warning(self, "Missing Model", "Phase shift model not found")
+            except Exception as e:
+                QMessageBox.warning(self, "Calculation Error", f"Error in phase shift calculation: {str(e)}")
+                
+        except Exception as e:
+            QMessageBox.warning(self, "Phase Shift Error", f"Error calculating phase shift: {str(e)}")
 
     def auto_detect_frequency(self, target='both'):
         """Auto-detect current frequency from impedance data using your parameter functions"""

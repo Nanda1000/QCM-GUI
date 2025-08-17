@@ -1,4 +1,3 @@
-from ..GUI.Acquire_data import NanoVNA
 import numpy as np
 
 
@@ -13,7 +12,7 @@ class phaseshiftmethod:
         
         return phase, s21, s21_db
 
-    def phaseshiftfrequency(self,s21, phase, freqs, s21_db):
+    def phaseshiftfrequency(self,phase, freqs, s21_db):
         
         targets = [-45, 0, 45]
         results = {}
@@ -23,7 +22,7 @@ class phaseshiftmethod:
             index = (np.abs(phase - target)).argmin()
             results[target] = {
                 "freq": freqs[idx],
-                "phase": phase_deg[idx],
+                "phase": phase[idx],
                 "s21_db": s21_db[idx]
         }
 
