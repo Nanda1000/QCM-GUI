@@ -81,19 +81,19 @@ class MplMultiCanvas(FigureCanvas):
             self.axes_Cm.clear()
             
             # Reset titles and labels
-
+            self.axes_Rm.set_title("Motional Resistance vs time")
             self.axes_Rm.set_xlabel("Time(s)")
             self.axes_Rm.set_ylabel("Rm(Ω)")
             
-
+            self.axes_Fs.set_title("Resonance frequency vs time")
             self.axes_Fs.set_xlabel("Time(s)")
             self.axes_Fs.set_ylabel("fs(Hz)")
             
-
+            self.axes_Lm.set_title("Motional Inductance vs time")
             self.axes_Lm.set_xlabel("Time(s)")
             self.axes_Lm.set_ylabel("Lm(H)")
             
-
+            self.axes_Cm.set_title("Motional Capacitance vs time")
             self.axes_Cm.set_xlabel("Time(s)")
             self.axes_Cm.set_ylabel("Cm(F)")
             
@@ -1659,19 +1659,17 @@ class MainWindow(QMainWindow):
             multi_toolbar = NavigationToolbar(self.multiplot, self.cryst_dyn_win)
             left_layout.addWidget(multi_toolbar)
             
-            self.multiplot.axes_Rm.set_title("Motional Resistance vs time")
+ 
             self.multiplot.axes_Rm.set_xlabel("Time(s)")
             self.multiplot.axes_Rm.set_ylabel("Rm(Ω)")
             
-            self.multiplot.axes_Fs.set_title("Resonance frequency vs time")
             self.multiplot.axes_Fs.set_xlabel("Time(s)")
             self.multiplot.axes_Fs.set_ylabel("fs(Hz)")
             
-            self.multiplot.axes_Lm.set_title("Motional Inductance vs time")
+
             self.multiplot.axes_Lm.set_xlabel("Time(s)")
             self.multiplot.axes_Lm.set_ylabel("Lm(H)")
             
-            self.multiplot.axes_Cm.set_title("Motional Capacitance vs time")
             self.multiplot.axes_Cm.set_xlabel("Time(s)")
             self.multiplot.axes_Cm.set_ylabel("Cm(F)")
             
