@@ -21,9 +21,9 @@ class phaseshiftmethod:
         for target in targets:
             index = (np.abs(phase - target)).argmin()
             results[target] = {
-                "freq": freqs[idx],
-                "phase": phase[idx],
-                "s21_db": s21_db[idx]
+                "freq": freqs[index],
+                "phase": phase[index],
+                "s21_db": s21_db[index]
         }
 
         return results
@@ -37,7 +37,7 @@ class phaseshiftmethod:
             s21_logmag = results[0]["s21_db"]
             Rm = 2 * 50 * (10 **(-s21_logmag/20)-1)
             Reff = 2 *50 + Rm
-            delta_f = f1 - f2
+            delta_f = abs(f1 - f2)
             Cm = delta_f/(2*np.pi* fs**2 * Reff)
             Lm = Reff/(2*np.pi*delta_f)
         
