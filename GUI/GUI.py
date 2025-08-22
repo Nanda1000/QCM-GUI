@@ -1747,7 +1747,7 @@ class MainWindow(QMainWindow):
             impedance = resist + 1j * react
             
             try:
-                Rm, Lm, Cm, C0, fs = parameter(freqs, impedance, resist)
+                Rm, Lm, Cm, C0, fs, Q = parameter(freqs, impedance, resist)
                 
                 # Update the display fields
                 self.rm_edit.setText(f"{Rm:.6f}")

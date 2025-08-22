@@ -8,11 +8,14 @@ import numpy as np
 def parameter_sauerbrey(freqs, impedance):
     Z1 = np.abs(impedance)
     
-    min_index = np.argmin(Z1)
+    #Check for Series or Parllel resonant frequency
+    Admitt = 1/Z1
+    conduct = Admitt.real
     
-    ft = freqs[min_index]
+    max_index = np.argmax(conduct)
+    fs = freqs[max_index]
     
-    
+    ft = fs
     
     return ft
     

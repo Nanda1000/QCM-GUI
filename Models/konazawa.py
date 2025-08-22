@@ -6,10 +6,11 @@ def parameter_konazawa(freqs, impedance):
     Z1 = np.abs(impedance)
     
     #Check for Series or Parllel resonant frequency
+    Admitt = 1/Z1
+    conduct = Admitt.real
     
-    
-    min_index = np.argmin(Z1)
-    fs = freqs[min_index]
+    max_index = np.argmax(conduct)
+    fs = freqs[max_index]
     
     ft = fs
     

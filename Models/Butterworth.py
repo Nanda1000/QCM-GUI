@@ -124,7 +124,7 @@ def parameter(freqs, impedance, Resistance=None):
     except Exception:
         C0 = 1e-12
 
-    return Rm, Lm, Cm, C0, fs
+    return Rm, Lm, Cm, C0, fs, Q
 
 # Residuals for fitting model
 def fit_data(parameters, f, Z_measured):
