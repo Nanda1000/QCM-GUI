@@ -1128,6 +1128,7 @@ class MainWindow(QMainWindow):
         start_row = index * int(self.sweep_points.text())
         end_row = start_row + int(self.sweep_points.text())
         sweep_data = self.data.iloc[start_row:end_row]
+        self.current_sweep_data = sweep_data
         self.table_model.set_dataframe(sweep_data)
         self.table_view.resizeColumnsToContents()
         self.update_plot()
@@ -1242,12 +1243,13 @@ class MainWindow(QMainWindow):
 
     def update_plot(self):
         try:
-            if self.data.empty or "Frequency(Hz)" not in self.data.columns or "Impedance(Ω)" not in self.data.columns:
+            plot_data = getattr(self, 'current_sweep_data', self.data)
+            if plot_data.empty or "Frequency(Hz)" not in plot_data.columns or "Impedance(Ω)" not in plot_data.columns:
                 self.plot_widget.clear()
                 return
 
-            x = pd.to_numeric(self.data["Frequency(Hz)"], errors='coerce')
-            y = pd.to_numeric(self.data["Impedance(Ω)"], errors='coerce')
+            x = pd.to_numeric(plot_data["Frequency(Hz)"], errors='coerce')
+            y = pd.to_numeric(plot_data["Impedance(Ω)"], errors='coerce')
             mask = x.notnull() & y.notnull()
             
             if mask.sum() == 0:
@@ -1272,12 +1274,13 @@ class MainWindow(QMainWindow):
     def update_new_plot(self):
         try:
             selected_plot = self.plot_select.currentText()
-            if self.data.empty or "Frequency(Hz)" not in self.data.columns or selected_plot not in self.data.columns:
+            plot_data = getattr(self, 'current_sweep_data', self.data)
+            if plot_data.empty or "Frequency(Hz)" not in plot_data.columns or selected_plot not in plot_data.columns:
                 self.plot_widget.clear()
                 return
 
-            x = pd.to_numeric(self.data["Frequency(Hz)"], errors='coerce')
-            y = pd.to_numeric(self.data[selected_plot], errors='coerce')
+            x = pd.to_numeric(plot_data["Frequency(Hz)"], errors='coerce')
+            y = pd.to_numeric(plot_data[selected_plot], errors='coerce')
             mask = x.notnull() & y.notnull()
             
             if mask.sum() == 0:
