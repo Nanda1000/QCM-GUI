@@ -56,7 +56,7 @@ class MplCanvas(FigureCanvas):
         try:
             self.axes.clear()
             self.axes.set_xlabel("Frequency(Hz)")
-            self.axes.set_ylabel("Resistance(Ω)")
+            self.axes.set_ylabel("Impedance(|Z|)")
             self.draw()
         except Exception:
             pass
@@ -413,6 +413,10 @@ class MainWindow(QMainWindow):
         self.btn_cryst_dyn.clicked.connect(self.crystallizationdynamics)
         self.btn_cryst_kin = QPushButton("Crystallization Kinetics")
         self.btn_cryst_kin.clicked.connect(self.crystallizationkinetics)
+        self.plot_select =  QComboBox()
+        self.plot_select.addItems(["Resistance(Ω)", "Reactance(Ω)", "Impedance(Ω)", "Phase(°)"])
+        self.plot_select.currentTextChanged.connect(self.update_new_plot)
+        an_layout.addWidget(self.plot_select)
         an_layout.addWidget(self.btn_sauer)
         an_layout.addWidget(self.btn_cryst_dyn)
         an_layout.addWidget(self.btn_cryst_kin)
@@ -431,7 +435,7 @@ class MainWindow(QMainWindow):
         table_layout.setContentsMargins(4, 4, 4, 4)
 
         self.table_view = QTableView()
-        self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Magnitude(Ω)", "Phase(°)"])
+        self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Impedance(Ω)", "Phase(°)"])
         self.table_model = TableModel(self.data)
         self.table_model.dataChanged.connect(self.update_plot)
         self.table_view.setModel(self.table_model)
@@ -459,10 +463,10 @@ class MainWindow(QMainWindow):
         plot_frame = QFrame()
         plot_layout = QVBoxLayout(plot_frame)
         plot_layout.setContentsMargins(4, 4, 4, 4)
-        plot_layout.addWidget(QLabel("Resistance vs Frequency"))
+        plot_layout.addWidget(QLabel("Impedance vs Frequency"))
         self.plot_widget = MplCanvas(self, width=5, height=4, dpi=100)
         self.plot_widget.axes.set_xlabel("Frequency(Hz)")
-        self.plot_widget.axes.set_ylabel("Resistance(Ω)")
+        self.plot_widget.axes.set_ylabel("Impedance(|Z|)")
         self.plot_widget.axes.plot(self.freqs, np.zeros_like(self.freqs), 'b-')
         
         self.plot_toolbar = NavigationToolbar(self.plot_widget, self)
@@ -487,7 +491,7 @@ class MainWindow(QMainWindow):
             self.saveas()
             
         
-        self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Magnitude(Ω)", "Phase(°)"])
+        self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Impedance(Ω)", "Phase(°)"])
         self.table_model.set_dataframe(self.data)
         
         try:
@@ -496,7 +500,7 @@ class MainWindow(QMainWindow):
             try:
                 self.plot_widget.axes.clear()
                 self.plot_widget.axes.set_xlabel("Frequency(Hz)")
-                self.plot_widget.axes.set_ylabel("Resistance(Ω)")
+                self.plot_widget.axes.set_ylabel("Impedance(|Z|)")
                 self.plot_widget.draw()
             except Exception:
                 pass
@@ -547,7 +551,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.data = pd.read_csv(file) if file.endswith(".csv") else pd.read_excel(file)
-            required_cols = ["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Magnitude(Ω)", "Phase(°)"]
+            required_cols = ["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Impedance(Ω)", "Phase(°)"]
             for col in required_cols:
                 if col not in self.data.columns:
                     self.data[col] = np.nan
@@ -598,7 +602,7 @@ class MainWindow(QMainWindow):
                 elements.append(Paragraph("Resistance vs Frequency Data Table saved to CSV file", styles["Normal"]))
                 elements.append(Spacer(1, 12))
                 
-                # Resistance vs Frequency Plot
+                # vs Frequency Plot
                 plot_filename = os.path.join(file, "plot.png")
                 self.plot_widget.figure.savefig(plot_filename, dpi=300, bbox_inches='tight')
                 img = Image(plot_filename, width=400, height=300)
@@ -608,13 +612,13 @@ class MainWindow(QMainWindow):
             
             # BVD Parameters
             bvd_data = []
-            if hasattr(self, 'rm_edit') and self.rm_edit.text():
+            if hasattr(self, 'rm_edit'):
                 bvd_data.append(['Parameter', 'Value', 'Unit'])
-                bvd_data.append(['Motional Resistance (Rm)', self.rm_edit.text(), 'Ω'])
-                bvd_data.append(['Motional Inductance (Lm)', self.lm_edit.text(), 'H'])
-                bvd_data.append(['Motional Capacitance (Cm)', self.cm_edit.text(), 'F'])
-                bvd_data.append(['Static Capacitance (C0)', self.c0_edit.text(), 'F'])
-                bvd_data.append(['Resonant Frequency (Fs)', self.f_edit.text(), 'Hz'])
+                bvd_data.append(['Motional Resistance (Rm)', f"{self.latest_rm:.6f}", 'Ω'])
+                bvd_data.append(['Motional Inductance (Lm)', f"{self.latest_lm:.6f}", 'H'])
+                bvd_data.append(['Motional Capacitance (Cm)', f"{self.latest_cm:.6f}", 'F'])
+                bvd_data.append(['Static Capacitance (C0)', f"{self.latest_c0:.6f}", 'F'])
+                bvd_data.append(['Resonant Frequency (Fs)', f"{self.latest_fs:.6f}", 'Hz'])
                 
                 # Save BVD parameters to CSV
                 bvd_df = pd.DataFrame(bvd_data[1:], columns=bvd_data[0])
@@ -1101,7 +1105,7 @@ class MainWindow(QMainWindow):
             "Frequency(Hz)": [np.nan for _ in range(10)],
             "Resistance(Ω)": [np.nan for _ in range(10)],
             "Reactance(Ω)": [np.nan for _ in range(10)],
-            "Magnitude(Ω)": [np.nan for _ in range(10)],
+            "Impedance(Ω)": [np.nan for _ in range(10)],
             "Phase(°)": [np.nan for _ in range(10)]
         })
         
@@ -1118,7 +1122,7 @@ class MainWindow(QMainWindow):
             "Frequency(Hz)": [np.nan],
             "Resistance(Ω)": [np.nan],
             "Reactance(Ω)": [np.nan],
-            "Magnitude(Ω)": [np.nan],
+            "Impedance(Ω)": [np.nan],
             "Phase(°)": [np.nan]
         })
         
@@ -1166,7 +1170,7 @@ class MainWindow(QMainWindow):
         )
         
         if confirm == QMessageBox.StandardButton.Yes:
-            self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Magnitude(Ω)", "Phase(°)"])
+            self.data = pd.DataFrame(columns=["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Impedance(Ω)", "Phase(°)"])
             self.table_model.set_dataframe(self.data)
             self.table_view.resizeColumnsToContents()
             self.update_plot()
@@ -1179,7 +1183,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.data = pd.read_csv(file) if file.endswith(".csv") else pd.read_excel(file)
-            required_cols = ["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Magnitude(Ω)", "Phase(°)"]
+            required_cols = ["Timestamp", "Frequency(Hz)", "Resistance(Ω)", "Reactance(Ω)", "Impedance(Ω)", "Phase(°)"]
             for col in required_cols:
                 if col not in self.data.columns:
                     self.data[col] = np.nan
@@ -1196,12 +1200,12 @@ class MainWindow(QMainWindow):
 
     def update_plot(self):
         try:
-            if self.data.empty or "Frequency(Hz)" not in self.data.columns or "Resistance(Ω)" not in self.data.columns:
+            if self.data.empty or "Frequency(Hz)" not in self.data.columns or "Impedance(Ω)" not in self.data.columns:
                 self.plot_widget.clear()
                 return
 
             x = pd.to_numeric(self.data["Frequency(Hz)"], errors='coerce')
-            y = pd.to_numeric(self.data["Resistance(Ω)"], errors='coerce')
+            y = pd.to_numeric(self.data["Impedance(Ω)"], errors='coerce')
             mask = x.notnull() & y.notnull()
             
             if mask.sum() == 0:
@@ -1213,10 +1217,40 @@ class MainWindow(QMainWindow):
             
             self.plot_widget.axes.clear()
             self.plot_widget.axes.set_xlabel("Frequency(Hz)")
-            self.plot_widget.axes.set_ylabel("Resistance(Ω)")
+            self.plot_widget.axes.set_ylabel("Impedance(|Z|)")
             self.plot_widget.axes.plot(xvals, yvals, 'ro-', markersize=3)
             self.plot_widget.draw()
             
+        except Exception as e:
+            QMessageBox.warning(self, "Plot Error", str(e))
+            
+    # Select the plot type vs Frequency
+
+        
+    def update_new_plot(self):
+        try:
+            selected_plot = self.plot_select.currentText()
+            if self.data.empty or "Frequency(Hz)" not in self.data.columns or selected_plot not in self.data.columns:
+                self.plot_widget.clear()
+                return
+
+            x = pd.to_numeric(self.data["Frequency(Hz)"], errors='coerce')
+            y = pd.to_numeric(self.data[selected_plot], errors='coerce')
+            mask = x.notnull() & y.notnull()
+            
+            if mask.sum() == 0:
+                self.plot_widget.clear()
+                return
+                
+            xvals = x[mask].astype(float).values
+            yvals = y[mask].astype(float).values
+            
+            self.plot_widget.axes.clear()
+            self.plot_widget.axes.set_xlabel("Frequency(Hz)")
+            self.plot_widget.axes.set_ylabel(selected_plot)
+            self.plot_widget.axes.plot(xvals, yvals, 'ro-', markersize=3)
+            self.plot_widget.draw()
+        
         except Exception as e:
             QMessageBox.warning(self, "Plot Error", str(e))
 
@@ -1489,6 +1523,11 @@ class MainWindow(QMainWindow):
                         self.phase_cm_result.setText(f"{Cm:.6e}")
                         self.phase_lm_result.setText(f"{Lm:.6e}")
                         
+                        self.latest_rm_result = Rm
+                        self.latest_reff_result = Reff
+                        self.latest_cm_result = Cm
+                        self.latest_lm_result = Lm
+                        
                         QMessageBox.information(self, "Phase Shift Analysis Complete", 
                                             f"Phase shift parameters calculated successfully")
                     else:
@@ -1756,6 +1795,12 @@ class MainWindow(QMainWindow):
                 self.c0_edit.setText(f"{C0:.6e}")
                 self.f_edit.setText(f"{fs:.2f}")
                 
+                self.latest_rm = Rm
+                self.latest_lm = Lm
+                self.latest_cm = Cm
+                self.latest_c0 = C0
+                self.latest_fs = fs
+                
                 QMessageBox.information(self, "Fit Complete", "BVD parameters fitted successfully")
                 
             except ImportError:
@@ -1993,9 +2038,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Exporting Error", str(e))
 
-    # ---------------------------
+  
     # Cleanup on close
-    # ---------------------------
+
     def closeEvent(self, event):
         """Clean up resources when closing the application."""
         try:
