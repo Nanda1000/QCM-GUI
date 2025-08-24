@@ -384,23 +384,36 @@ class MainWindow(QMainWindow):
         self.btn_start = QPushButton("Start Logging")
         self.btn_stop = QPushButton("Stop Logging")
         self.upload_button = QPushButton("Upload Data")
-        
         interval_value = QHBoxLayout()
         interval_value.addWidget(QLabel("Interval (s):"))
         self.interval = QComboBox()
         self.interval.addItems([str(i) for i in [2, 5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120, 180, 300, 600]])
         self.interval.setCurrentText("2")
+        split_value = QHBoxLayout()
+        self.split = QPushButton("Split")
+        self.sweep = QComboBox()
+        self.sweep.addItems(["51", "101", "201", "301", "401"])
+        split_value.addWidget(self.split)
+        split_value.addWidget(self.sweep)
+        set_value = QHBoxLayout()
+        set_value.addWidget(QLabel("Data Set:"))
+        self.set = QComboBox()
         interval_value.addWidget(self.interval)
+        set_value.addWidget(self.set)
+        set_value.addStretch()
         interval_value.addStretch()
         self.btn_stop.setEnabled(False)
         self.btn_start.clicked.connect(self.start_logging_button)
         self.btn_stop.clicked.connect(self.stop_logging_button)
         self.upload_button.clicked.connect(self.upload_button_clicked)
+        self.split.clicked.connect(self.split_data)
         ctl_layout.addWidget(self.btn_start)
         ctl_layout.addWidget(self.btn_stop)
         ctl_layout.addWidget(self.upload_button)
         logging_layout.addLayout(ctl_layout)
         logging_layout.addLayout(interval_value)
+        logging_layout.addLayout(split_value)
+        logging_layout.addLayout(set_value)
         control_grp.setLayout(logging_layout)
         left_layout.addWidget(control_grp)
 
@@ -775,7 +788,7 @@ class MainWindow(QMainWindow):
                     "Frequency(Hz)": float(f),
                     "Resistance(Ω)": float(r),
                     "Reactance(Ω)": float(x),
-                    "Magnitude(Ω)": float(m),
+                    "Impedance(Ω)": float(m),
                     "Phase(°)": float(p)
                 })
             
@@ -1095,6 +1108,29 @@ class MainWindow(QMainWindow):
         self.act_stop.setEnabled(False)
         
         self.statusBar().showMessage("Logging stopped", 3000)
+        
+    def split_data(self):
+        total_rows = len(self.data)
+        sweep_points = int(self.sweep_points.text())
+        sweeps = total_rows//sweep_points
+        self.set.clear()
+        for i in range(sweeps):
+            self.set.addItem(f"Sweep {i+1}")
+        try:
+            self.set.currentIndexChanged.disconnect()
+        except Exception:
+            pass
+        self.set.currentIndexChanged.connect(self.display_sweep)
+        self.display_sweep()
+        
+    def display_sweep(self):
+        index = self.set.currentIndex()
+        start_row = index * int(self.sweep_points.text())
+        end_row = start_row + int(self.sweep_points.text())
+        sweep_data = self.data.iloc[start_row:end_row]
+        self.table_model.set_dataframe(sweep_data)
+        self.table_view.resizeColumnsToContents()
+        self.update_plot()
 
     # Inserting the table
 
@@ -1187,12 +1223,18 @@ class MainWindow(QMainWindow):
             for col in required_cols:
                 if col not in self.data.columns:
                     self.data[col] = np.nan
-            
+                    
             self.table_model = TableModel(self.data)
             self.table_model.dataChanged.connect(self.update_plot)
             self.table_view.setModel(self.table_model)
             self.table_view.resizeColumnsToContents()
             self.update_plot()
+                    
+            self.sweep.setCurrentText(self.sweep_points.text())
+            self.sweep.currentTextChanged.connect(lambda val: (self.sweep_points.setText(val), self.split_data()))
+
+            self.split_data()
+
         except Exception as e:
             QMessageBox.warning(self, "File Error", str(e))
 
