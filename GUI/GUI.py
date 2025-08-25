@@ -390,7 +390,8 @@ class MainWindow(QMainWindow):
         self.interval.addItems([str(i) for i in [2, 5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120, 180, 300, 600]])
         self.interval.setCurrentText("2")
         split_value = QHBoxLayout()
-        self.split = QPushButton("Split")
+        self.split = QComboBox()
+        self.split.addItems(["Split", "No Split"])
         self.sweep = QComboBox()
         self.sweep.addItems(["51", "101", "201", "301", "401"])
         split_value.addWidget(self.split)
@@ -406,7 +407,7 @@ class MainWindow(QMainWindow):
         self.btn_start.clicked.connect(self.start_logging_button)
         self.btn_stop.clicked.connect(self.stop_logging_button)
         self.upload_button.clicked.connect(self.upload_button_clicked)
-        self.split.clicked.connect(self.split_data)
+        self.split.currentTextChanged.connect(self.split_data)
         ctl_layout.addWidget(self.btn_start)
         ctl_layout.addWidget(self.btn_stop)
         ctl_layout.addWidget(self.upload_button)
@@ -1110,18 +1111,30 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Logging stopped", 3000)
         
     def split_data(self):
-        total_rows = len(self.data)
-        sweep_points = int(self.sweep_points.text())
-        sweeps = total_rows//sweep_points
-        self.set.clear()
-        for i in range(sweeps):
-            self.set.addItem(f"Sweep {i+1}")
-        try:
-            self.set.currentIndexChanged.disconnect()
-        except Exception:
-            pass
-        self.set.currentIndexChanged.connect(self.display_sweep)
-        self.display_sweep()
+        if self.split.currentText() == "Split":
+            try:
+                total_rows = len(self.data)
+                sweep_points = int(self.sweep_points.text())
+                sweeps = total_rows//sweep_points
+                self.set.clear()
+                for i in range(sweeps):
+                    self.set.addItem(f"Sweep {i+1}")
+                try:
+                    self.set.currentIndexChanged.disconnect()
+                except Exception:
+                    pass
+                self.set.currentIndexChanged.connect(self.display_sweep)
+                self.display_sweep()
+            except Exception as e:
+                QMessageBox.warning("Can't Split this Data", e)
+        else:
+            self.set.clear()
+            self.current_sweep_data = self.data
+            self.table_model.set_dataframe(self.data)
+            self.table_view.resizeColumnsToContents()
+            self.update_plot()
+    
+            
         
     def display_sweep(self):
         index = self.set.currentIndex()
@@ -1537,13 +1550,14 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Connection Error", "Please connect to NanoVNA first")
                 return
                 
-            if self.data.empty:
+            data_source = getattr(self, 'current_sweep_data', self.data)
+            if data_source.empty:
                 QMessageBox.warning(self, "No Data", "Please run a sweep first.")
                 return
             
             # Get the latest sweep data
             points = int(self.sweep_points.text() or 201)
-            if len(self.data) < points:
+            if len(data_source) < points:
                 QMessageBox.warning(self, "Insufficient Data", "Please run a complete sweep first")
                 return
             try:
@@ -1591,7 +1605,8 @@ class MainWindow(QMainWindow):
     def auto_detect_frequency(self, target='both'):
         """Auto-detect current frequency from impedance data using your parameter functions"""
         try:
-            if self.data.empty:
+            data_source = getattr(self, 'current_sweep_data', self.data)
+            if data_source.empty:
                 QMessageBox.warning(self, "No Data", "No measurement data available.")
                 return
             
@@ -1601,7 +1616,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Insufficient Data", "Please run again")
                 return
             
-            last_sweep = self.data.tail(points)
+            last_sweep = data_source.tail(points)
             freqs = pd.to_numeric(last_sweep["Frequency(Hz)"], errors='coerce').dropna().values
             resist = pd.to_numeric(last_sweep["Resistance(Ω)"], errors='coerce').fillna(0).values
             react = pd.to_numeric(last_sweep["Reactance(Ω)"], errors='coerce').fillna(0).values
@@ -1808,18 +1823,19 @@ class MainWindow(QMainWindow):
     def fit_data(self):
         """Fit BVD parameters to current data"""
         try:
-            if self.data.empty:
+            data_source = getattr(self, 'current_sweep_data', self.data)
+            if data_source.empty:
                 QMessageBox.warning(self, "No Data", "No data available for fitting")
                 return
             
             # Get the latest sweep data
             points = int(self.sweep_points.text() or 201)
-            if len(self.data) < points:
+            if len(data_source) < points:
                 QMessageBox.warning(self, "Insufficient Data", "Need at least one complete sweep")
                 return
             
             # Use the last complete sweep
-            last_sweep = self.data.tail(points)
+            last_sweep = data_source.tail(points)
             freqs = pd.to_numeric(last_sweep["Frequency(Hz)"], errors='coerce').dropna().values
             resist = pd.to_numeric(last_sweep["Resistance(Ω)"], errors='coerce').fillna(0).values
             react = pd.to_numeric(last_sweep["Reactance(Ω)"], errors='coerce').fillna(0).values
@@ -1859,14 +1875,9 @@ class MainWindow(QMainWindow):
     def plotcrystallization(self):
         """Extract sweep-by-sweep BVD params and update dynamics plots."""
         try:
-            from Models.Butterworth import parameter
-        except ImportError:
-            QMessageBox.warning(self, "Missing Model", "Butterworth model not found.")
-            return
-
-        try:
-            if self.data.empty:
-                QMessageBox.warning(self, "Data Error", "No data to analyze.")
+            data_source = getattr(self, 'current_sweep_data', self.data)
+            if data_source.empty:
+                QMessageBox.warning(self, "No Data", "No data for crystallization")
                 return
 
             points = int(self.sweep_points.text() or 201)
@@ -1874,7 +1885,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Input Error", "Invalid sweep points.")
                 return
 
-            total_rows = len(self.data)
+            total_rows = len(data_source)
             if total_rows < points:
                 QMessageBox.warning(self, "Data Error", "Insufficient data for one sweep.")
                 return
@@ -1887,23 +1898,30 @@ class MainWindow(QMainWindow):
             t_seconds, rm_values, fs_values, lm_values, cm_values = [], [], [], [], []
 
             for i in range(num_sweeps):
-                block = self.data.iloc[i * points:(i + 1) * points]
-                freqs = pd.to_numeric(block["Frequency(Hz)"], errors='coerce').dropna().values
-                resist = pd.to_numeric(block["Resistance(Ω)"], errors='coerce').fillna(0).values
-                react = pd.to_numeric(block["Reactance(Ω)"], errors='coerce').fillna(0).values
-                
-                if len(freqs) == 0:
+                block = data_source.iloc[i * points:(i + 1) * points]
+                freqs = pd.to_numeric(block["Frequency(Hz)"], errors='coerce').values
+                resist = pd.to_numeric(block["Resistance(Ω)"], errors='coerce').values
+                react = pd.to_numeric(block["Reactance(Ω)"], errors='coerce').values
+
+                mask = np.isfinite(freqs) & np.isfinite(resist) & np.isfinite(react)
+                freqs = freqs[mask]
+                resist = resist[mask]
+                react = react[mask]
+
+                if freqs.size < 4:
                     continue
-                    
+
                 impedance = resist + 1j * react
+
                 try:
-                    Rm, Lm, Cm, C0, fs = parameter(freqs, impedance, resist)
+                    Rm, Lm, Cm, C0, fs, Q = parameter(freqs, impedance, resist)
                     rm_values.append(Rm)
                     fs_values.append(fs)
                     lm_values.append(Lm)
                     cm_values.append(Cm)
                     t_seconds.append(i * 2)
-                except Exception:
+                except Exception as e:  
+                    print(f"Error in sweep {i}: {e}")
                     continue
 
             if not rm_values:
@@ -1930,15 +1948,27 @@ class MainWindow(QMainWindow):
             # Plot
             self.multiplot.axes_Rm.clear()
             self.multiplot.axes_Rm.plot(t_seconds, rm_values, 'bo-')
+            self.multiplot.axes_Rm.set_title("Motional Resistance vs time")
+            self.multiplot.axes_Rm.set_xlabel("Time(s)")
+            self.multiplot.axes_Rm.set_ylabel("Rm(Ω)")
 
             self.multiplot.axes_Fs.clear()
             self.multiplot.axes_Fs.plot(t_seconds, fs_values, 'ro-')
+            self.multiplot.axes_Fs.set_title("Resonance frequency vs time")
+            self.multiplot.axes_Fs.set_xlabel("Time(s)")
+            self.multiplot.axes_Fs.set_ylabel("fs(Hz)")
 
             self.multiplot.axes_Lm.clear()
             self.multiplot.axes_Lm.plot(t_seconds, lm_values, 'go-')
+            self.multiplot.axes_Lm.set_title("Motional Inductance vs time")
+            self.multiplot.axes_Lm.set_xlabel("Time(s)")
+            self.multiplot.axes_Lm.set_ylabel("Lm(H)")
 
             self.multiplot.axes_Cm.clear()
             self.multiplot.axes_Cm.plot(t_seconds, cm_values, 'mo-')
+            self.multiplot.axes_Cm.set_title("Motional Capacitance vs time")
+            self.multiplot.axes_Cm.set_xlabel("Time(s)")
+            self.multiplot.axes_Cm.set_ylabel("Cm(F)")
             
             self.multiplot.draw()
 
@@ -2034,12 +2064,13 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            if self.data.empty:
+            data_source = getattr(self, 'current_sweep_data', self.data)
+            if data_source.empty:
                 QMessageBox.warning(self, "Data Error", "No data for kinetics.")
                 return
 
-            timestamps = pd.to_datetime(self.data["Timestamp"], errors="coerce")
-            freqs = pd.to_numeric(self.data["Frequency(Hz)"], errors="coerce")
+            timestamps = pd.to_datetime(data_source["Timestamp"], errors="coerce")
+            freqs = pd.to_numeric(data_source["Frequency(Hz)"], errors="coerce")
             mask = ~(timestamps.isna() | freqs.isna())
             if mask.sum() < 3:
                 QMessageBox.warning(self, "Data Error", "Too few points for analysis.")

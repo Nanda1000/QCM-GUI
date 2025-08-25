@@ -82,12 +82,20 @@ def parameter(freqs, impedance, Resistance=None):
         Z1 = impedance
 
     # Spline smoothing to find resonance frequency fs
-    try:
-        spline = UnivariateSpline(freqs, Z1, s=1)
-        fine_freqs = np.linspace(freqs[0], freqs[-1], 5000)
-        fine_Z1 = spline(fine_freqs)
-    except Exception as e:
-        raise RuntimeError(f"Spline fitting failed: {e}")
+    s_value = [1, 5, 10, 20, 50, 100, 200, 500, 1000]
+    for s in s_value:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                spline = UnivariateSpline(freqs, Z1, s)
+                fine_freqs = np.linspace(freqs[0], freqs[-1], 5000)
+                fine_Z1 = spline(fine_freqs)
+            break
+        except Exception:
+            spline = None
+            continue
+    else:
+        raise RuntimeError("Spline fitting failed for all smoothing values.")
 
     min_index = np.argmin(fine_Z1)
     fs = fine_freqs[min_index]
