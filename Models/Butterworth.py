@@ -22,124 +22,128 @@ There are some key formulas to use, Below are the ones
 
 """
 
+
 def butterworth(fs, Rm, Lm, Cm, C0):
-    #frequency need to be entered as the value can be obtained from where impedance is minimum  is magnitude of S21
-    
+    """
+    Compute total BVD impedance at frequencies fs.
+    fs: frequencies array
+    Rm, Lm, Cm: motional parameters
+    C0: static capacitance
+    Returns: Z_total
+    """
     w = 2 * np.pi * fs
     j = 1j
-    
 
-    if np.any(w == 0):
-        w = np.where(w == 0, 1e-12, w)  
-    if np.any(Cm == 0):
-        Cm = np.where(Cm == 0, 1e-12, Cm)  
-    if np.any(C0 == 0):
-        C0 = np.where(C0 == 0, 1e-12, C0) 
-    
+    # Avoid division by zero
+    w = np.where(w == 0, 1e-12, w)
+    Cm = np.where(Cm == 0, 1e-12, Cm)
+    C0 = np.where(C0 == 0, 1e-12, C0)
+
     Zm = Rm + j * w * Lm + 1 / (j * w * Cm)
     Z0 = 1 / (j * w * C0)
-    
-    #Parallel 
-    Y = 1/Zm + 1/Z0
-
+    Y = 1 / Zm + 1 / Z0
     Y = np.where(Y == 0, 1e-12, Y)
-    Z_tot = 1/Y
-    return Z_tot
-
-    
-"""Interpolation done to find the points crossed for qualify factor or to find the frequency points"""
-    
-def half_power_threshold(freqs, Z1, R):
-    half_power_freqs = []
-    for i in range(1, len(Z1)):
-       if(Z1[i-1]-R) * (Z1[i] -R) <= 0:
-          f1, f2 = freqs[i-1], freqs[i]
-          z1, z2 = Z1[i-1], Z1[i]
-          slope = (z2 -z1)/(f2-f1)
-          cross = f1 + (R -z1) / slope
-          half_power_freqs.append(cross)
-          
-    return half_power_freqs
+    return 1 / Y
 
 
+def calculate_Q_from_impedance(freqs, Z1):
+    abs_Z = np.abs(Z1)
+    min_idx = np.argmin(abs_Z)
+    fs = freqs[min_idx]
+    min_Z = abs_Z[min_idx]
 
-def parameter(freqs, impedance, Resistance=None):
-    freqs = np.array(freqs)
-    impedance = np.array(impedance)
+    threshold = min_Z * np.sqrt(2)
 
-    # Handle insufficient data for spline (less than 4 points)
-    if len(freqs) < 4:
-        min_index = np.argmin(np.abs(impedance))
-        fs = freqs[min_index]
-        Rm = Resistance[min_index] if Resistance is not None else impedance[min_index].real
-        return Rm, None, None, None, fs
-
-    # Handle real vs complex impedance
-    if np.iscomplexobj(impedance):
-        Z1 = np.abs(impedance)
-    else:
-        warnings.warn("Only real impedance provided. Cannot extract full electrical parameters.")
-        Z1 = impedance
-
-    # Spline smoothing to find resonance frequency fs
-    s_value = [1, 5, 10, 20, 50, 100, 200, 500, 1000]
-    for s in s_value:
+    # Robust spline fitting
+    s_values = [1, 5, 10, 20, 50, 100, 200, 500, 1000]
+    spline = None
+    for s in s_values:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                spline = UnivariateSpline(freqs, Z1, s)
-                fine_freqs = np.linspace(freqs[0], freqs[-1], 5000)
-                fine_Z1 = spline(fine_freqs)
+                spline = UnivariateSpline(freqs, abs_Z - threshold, s)
+            fine_freqs = np.linspace(freqs[0], freqs[-1], 5000)
+            fine_Z = spline(fine_freqs)
             break
         except Exception:
             spline = None
             continue
     else:
-        raise RuntimeError("Spline fitting failed for all smoothing values.")
+        spline = None
 
-    min_index = np.argmin(fine_Z1)
-    fs = fine_freqs[min_index]
-    f = fs
+    # If spline fails or no roots, fallback to nearest points
+    if spline is not None:
+        roots = spline.roots()
+        left_roots = roots[roots < fs]
+        right_roots = roots[roots > fs]
 
+        if len(left_roots) == 0:
+            left_roots = [fine_freqs[np.where(fine_Z < 0)[0][0]]] if np.any(fine_Z < 0) else [fs]
+        if len(right_roots) == 0:
+            right_roots = [fine_freqs[np.where(fine_Z < 0)[0][-1]]] if np.any(fine_Z < 0) else [fs]
 
-    # Find nearest real value for fs and Rm
-    nearest_index = np.argmin(np.abs(freqs - f))
-    Zfs = impedance[nearest_index]
-    Rm = Zfs.real
-
-    # Half-power bandwidth for Q calculation
-    R = Rm * np.sqrt(2)
-    half_power_freqs = half_power_threshold(freqs, Z1, R)
-    if len(half_power_freqs) >= 2:
-        df = abs(half_power_freqs[-1] - half_power_freqs[0])
-        Q = f / df
+        bandwidth = right_roots[-1] - left_roots[0]
     else:
-        Q = 8000  # fallback
-
-    # Compute Lm and Cm
-    Lm = Rm * Q / (2 * np.pi * f) if f > 0 else 1e-6
-    Cm = 1 / (Lm * (2 * np.pi * f) ** 2) if Lm > 0 and f > 0 else 1e-12
-
-    # Estimate static capacitance C0
-    try:
-        high_freqs = freqs[-10:]
-        high_ImZ = np.imag(impedance[-10:])
-        if np.all(high_ImZ != 0):
-            C0_vals = -1 / (2 * np.pi * high_freqs * high_ImZ)
-            C0 = np.mean(C0_vals)
+        # fallback to simple linear search
+        indices = np.where(abs_Z <= threshold)[0]
+        if len(indices) >= 2:
+            bandwidth = freqs[indices[-1]] - freqs[indices[0]]
         else:
-            C0 = 1e-12
-    except Exception:
-        C0 = 1e-12
+            bandwidth = np.nan
 
-    return Rm, Lm, Cm, C0, fs, Q
-
-# Residuals for fitting model
-def fit_data(parameters, f, Z_measured):
-    Rm, Lm, Cm, C0 = parameters
-    Z_model = butterworth(f, Rm, Lm, Cm, C0)
-    residual = np.concatenate([np.real(Z_model - Z_measured), np.imag(Z_model - Z_measured)])
-    return residual
+    Q = fs / bandwidth if bandwidth > 0 else np.nan
+    return fs, bandwidth, Q
 
 
 
+def parameter(freqs, impedance):
+    """
+    Extract crystal parameters:
+    Rm, Lm, Cm, C0, fs, Q, D
+    Only uses impedance half-power method for Q.
+    """
+    freqs = np.array(freqs, dtype=float)
+    Z = np.array(impedance, dtype=complex)
+
+    # Clean invalid data
+    mask = np.isfinite(freqs) & np.isfinite(Z)
+    freqs, Z = freqs[mask], Z[mask]
+    if len(freqs) < 5:
+        return None, None, None, None, None, None, None
+
+    # Series resonance fs (minimum |Z|)
+    absZ = np.abs(Z)
+    fs_index = np.argmin(absZ)
+    if 1 < fs_index < len(absZ)-2:
+        f_fit = freqs[fs_index-1:fs_index+2]
+        z_fit = absZ[fs_index-1:fs_index+2]
+        coeffs = np.polyfit(f_fit, z_fit, 2)
+        fs = -coeffs[1] / (2 * coeffs[0])
+    else:
+        fs = freqs[fs_index]
+
+    # Motional resistance
+    Rm = abs(np.real(Z[fs_index]))
+
+  
+    _, _, Q = calculate_Q_from_impedance(freqs, Z)
+    print(f"[INFO] Q from impedance half-power: {Q:.1f}")
+
+ 
+    if not np.isnan(Q) and Q > 0:
+        Lm = Rm * Q / (2 * np.pi * fs)
+        Cm = 1 / (Lm * (2 * np.pi * fs)**2)
+    else:
+        Lm, Cm = np.nan, np.nan
+        print("[WARNING] Q calculation failed, Lm and Cm will be NaN")
+
+    try:
+        Y = 1 / Z
+        B = Y.imag
+        C0 = abs(np.mean(B[-10:] / (2 * np.pi * freqs[-10:])))
+    except:
+        C0 = np.nan
+
+    D = 1 / Q if not np.isnan(Q) and Q > 0 else np.nan
+
+    return Rm, Lm, Cm, C0, fs, Q, D
