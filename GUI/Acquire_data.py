@@ -260,42 +260,138 @@ class NanoVNA:
         except Exception as e:
             print(f"[ERROR] Failed to get data: {e}")
             return []
+        
+    def calibrate_vna(self, cmd):
+        """Get measurement data from NanoVNA"""
+        if not self.ser or not self.ser.is_open:
+            print("[ERROR] Serial connection not open")
+            return []
+        
+        
+        try:
+            # Clear buffers
+            self.ser.reset_input_buffer()
+            
+            # Send data command
+            self.ser.write((cmd + "\r\n").encode())
+            time.sleep(0.2)
+            
+            lines = []
+            start_time = time.time()
+            echo_skipped = False
+            
+            # Read data until prompt or timeout
+            while time.time() - start_time < 10:  # 10 second timeout for data
+                if self.ser.in_waiting:
+                    line = self.ser.readline().decode(errors='ignore').strip()
+                    
+                    if not line:
+                        continue
+                    
+                    # Skip command echo
+                    if not echo_skipped and line == cmd:
+                        echo_skipped = True
+                        continue
+                    
+                    # Check for prompt (end of data)
+                    if self.prompt_pattern.search(line):
+                        break
+                    
+
+                    
+                    lines.append(line)
+                        
+                else:
+                    time.sleep(0.1)
+            
+            return lines
+        
+        except Exception as e:
+            print(f"[ERROR] Failed to get data: {e}")
+            return []
     
     def parse_s11_data(self, lines):
-        """Parse data lines into complex S11 values"""
+        """Parse data lines into complex S11 values with auto sign correction"""
         s11_list = []
-        
+
         for line in lines:
             try:
                 parts = line.strip().split()
                 if len(parts) >= 2:
-                    re = float(parts[0])
-                    im = float(parts[1])
-                    s11_list.append(complex(re, im))
+                    re_val = float(parts[0])
+                    im_val = float(parts[1])
+                    s11_list.append(complex(re_val, im_val))
             except (ValueError, IndexError) as e:
                 print(f"[WARNING] Could not parse S11 line: '{line}' - {e}")
                 continue
-        
+
         print(f"[INFO] Parsed {len(s11_list)} S11 values")
+
+        # Auto sign correction
+        if s11_list:
+            # Test impedance conversion
+            z_test = [self.s11_to_impedance(s) for s in s11_list]
+            y_test = [1.0 / z for z in z_test if z != 0]
+            
+            # Check both conductance and resistance
+            median_conductance = np.median([y.real for y in y_test if not np.isinf(y.real)])
+            median_resistance = np.median([z.real for z in z_test if not np.isinf(z.real)])
+            
+            # Sign correction needed if conductance is negative OR resistance is negative
+            if median_conductance < 0 or median_resistance < 0:
+                print("[INFO] Detected negative impedance/conductance, flipping S11 imag parts")
+                s11_list = [complex(c.real, -c.imag) for c in s11_list]
+                
+                # Verify correction worked
+                z_corrected = [self.s11_to_impedance(s) for s in s11_list]
+                median_r_corrected = np.median([z.real for z in z_corrected if not np.isinf(z.real)])
+                if median_r_corrected < 0:
+                    print("[INFO] Further correction needed, flipping S11 real parts")
+                    s11_list = [complex(-c.real, c.imag) for c in s11_list]
+
         return s11_list
+
     
     def parse_s21_data(self, lines):
-        """Parse data lines into complex S21 values"""
+        """Parse data lines into complex S21 values with auto sign correction"""
         s21_list = []
-        
+
         for line in lines:
             try:
                 parts = line.strip().split()
                 if len(parts) >= 2:
-                    re = float(parts[0])
-                    im = float(parts[1])
-                    s21_list.append(complex(re, im))
+                    re_val = float(parts[0])
+                    im_val = float(parts[1])
+                    s21_list.append(complex(re_val, im_val))
             except (ValueError, IndexError) as e:
                 print(f"[WARNING] Could not parse S21 line: '{line}' - {e}")
                 continue
-        
+
         print(f"[INFO] Parsed {len(s21_list)} S21 values")
+
+        # --- Auto sign correction ---
+        if s21_list:
+            z_test = [self.s21_to_impedance(s) for s in s21_list]
+            y_test = [1.0 / z for z in z_test if z != 0]
+            
+            # Check both conductance and resistance
+            median_conductance = np.median([y.real for y in y_test if not np.isinf(y.real)])
+            median_resistance = np.median([z.real for z in z_test if not np.isinf(z.real)])
+            
+            # Sign correction needed if conductance is negative OR resistance is negative
+            if median_conductance < 0 or median_resistance < 0:
+                print("[INFO] Detected negative impedance/conductance, flipping S21 imag parts")
+                s21_list = [complex(c.real, -c.imag) for c in s21_list]
+                
+                # Verify correction worked
+                z_corrected = [self.s21_to_impedance(s) for s in s21_list]
+                median_r_corrected = np.median([z.real for z in z_corrected if not np.isinf(z.real)])
+                if median_r_corrected < 0:
+                    print("[INFO] Further correction needed, flipping S21 real parts")
+                    s21_list = [complex(-c.real, c.imag) for c in s21_list]
+
         return s21_list
+
     
     def s11_to_impedance(self, s11):
         """Convert S11 to impedance"""
@@ -309,7 +405,42 @@ class NanoVNA:
             return complex(float('inf'), float('inf'))
         return self.z0 * 2 * (1-s21)/s21
     
-            
+    def calibrate(self):
+        """Calibrate"""
+        self.calibrate_vna("cal open")
+        time.sleep(2)
+        self.calibrate_vna("cal short")
+        time.sleep(2)
+        self.calibrate_vna("cal load")
+        time.sleep(2)
+        self.calibrate_vna("cal thru")
+        time.sleep(2)
+        self.calibrate_vna("cal save")
+        print("[INFO] Calibration complete")
+        
+    def calibrate_open(self):
+        return self.calibrate_vna("cal open")
+    def calibrate_short(self):
+        return self.calibrate_vna("cal short")
+    def calibrate_load(self):
+        return self.calibrate_vna("cal load")
+    def calibrate_thru(self):
+        return self.calibrate_vna("cal thru")
+    def calibrate_save(self):
+        return self.calibrate_vna("cal save")
+    def reset_calibration(self):
+        return self.calibrate_vna("cal reset")
+        
+
+    def control_pause_sweep(self):
+        self.send_cmd("pause")
+    def control_resume_sweep(self):
+        self.send_cmd("resume")
+    def control_reset(self):
+        self.send_cmd("reset")
+        
+        
+         
     
     def get_frequencies(self, num_points=None):
         """Get frequency array based on current sweep settings"""

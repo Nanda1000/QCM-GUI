@@ -200,6 +200,15 @@ class MainWindow(QMainWindow):
         self.cryst_dyn_win = None
         self.cryst_kin_win = None
         
+        self.latest_rm = 0.0
+        self.latest_lm = 0.0
+        self.latest_cm = 0.0
+        self.latest_c0 = 0.0
+        self.latest_fs = 0.0
+        self.latest_rm_result = 0.0
+        self.latest_cm_result = 0.0
+        self.latest_lm_result = 0.0
+        
         # Signal handler for thread-safe communication
         self.signal_handler = DataSignalHandler()
         self.signal_handler.data_received.connect(self.vna_data)
@@ -291,8 +300,17 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.button_action8)
         self.button_action8.triggered.connect(self.insert_button_clicked)
         self.act_toggle_theme = QAction("Toggle Dark Mode", self)
+        self.sweep_pause = QAction("Pause Sweep", self)
+        self.sweep_resume = QAction("Resume Sweep", self)
+        self.reset = QAction("Reset", self)
+        self.sweep_pause.triggered.connect(self.pause_sweep)
+        self.sweep_resume.triggered.connect(self.resume_sweep)
+        self.reset.triggered.connect(self.all_reset)
         self.act_toggle_theme.triggered.connect(self.toggle_theme)
         edit_menu.addAction(self.act_toggle_theme)
+        edit_menu.addAction(self.sweep_pause)
+        edit_menu.addAction(self.sweep_resume)
+        edit_menu.addAction(self.reset)
         self.act_export = QAction("Export CSV", self)
         self.act_export.triggered.connect(self.export_csv)
         view_menu.addAction(self.act_export)
@@ -317,12 +335,15 @@ class MainWindow(QMainWindow):
 
         # Controls
         left_widget = QWidget()
+        left_widget.setFixedWidth(350)
+        left_widget.addStretch()
         left_layout = QVBoxLayout(left_widget)
-        left_layout.setSpacing(12)
-        left_layout.setContentsMargins(8, 8, 8, 8)
+        left_layout.setSpacing(8)
+        left_layout.setContentsMargins(10, 10, 10, 10)
 
         # Metadata
         meta_grp = QGroupBox("Metadata")
+        meta_grp.setMaximumHeight(150)
         meta_layout = QFormLayout()
         self.sample_name = QLineEdit()
         self.batch_number = QLineEdit()
@@ -440,6 +461,21 @@ class MainWindow(QMainWindow):
         left_layout.addStretch()
         main_splitter.addWidget(left_widget)
         left_widget.setMinimumWidth(320)
+        
+        #Calibrate
+        calibrate_grp = QGroupBox("Calibration")
+        calibrate_layout = QVBoxLayout()
+        self.btn_calibrate = QPushButton("Calibrate VNA")
+        self.sweep_pause = QPushButton("Pause Sweep")
+        self.sweep_resume = QPushButton("Resume Sweep")
+        self.reset = QPushButton("Reset")
+        self.btn_calibrate.clicked.connect(self.calibrate_vna)
+        calibrate_layout.addWidget(self.btn_calibrate)
+        calibrate_grp.setLayout(calibrate_layout)
+        left_layout.addWidget(calibrate_grp)
+        left_widget.setMinimumWidth(320)
+        left_layout.addStretch()
+
 
         right_splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -633,6 +669,8 @@ class MainWindow(QMainWindow):
                 bvd_data.append(['Motional Capacitance (Cm)', f"{self.latest_cm:.6f}", 'F'])
                 bvd_data.append(['Static Capacitance (C0)', f"{self.latest_c0:.6f}", 'F'])
                 bvd_data.append(['Resonant Frequency (Fs)', f"{self.latest_fs:.6f}", 'Hz'])
+                bvd_data.append(['Quality Factor (Q)', f"{self.latest_Q:.6f}", '-'])
+                bvd_data.append(['Damping Factor (D)', f"{self.latest_D:.6f}", '-'])
                 
                 # Save BVD parameters to CSV
                 bvd_df = pd.DataFrame(bvd_data[1:], columns=bvd_data[0])
@@ -1145,6 +1183,55 @@ class MainWindow(QMainWindow):
         self.table_model.set_dataframe(sweep_data)
         self.table_view.resizeColumnsToContents()
         self.update_plot()
+        
+    #calibration
+    def calibrate_vna(self):
+        if not self._is_vna_connected():
+            QMessageBox.warning(self, "Connection Error", "Please connect to NanoVNA first")
+            return
+        
+        try:
+            self.signal_handler.status_update.emit("Starting calibration")
+            if self.vna.calibrate():
+                self.signal_handler.status_update.emit("Calibration completed successfully")
+            else:
+                self.signal_handler.error_occurred.emit("Calibration Failed", "Calibration process failed")
+        except Exception as e:
+            self.signal_handler.error_occurred.emit("Calibration Error", str(e))
+                
+        self.statusBar().showMessage("Calibrating NanoVNA...", 2000)
+        
+        
+            
+    def pause_sweep(self):
+        if not self._is_vna_connected():
+            QMessageBox.warning(self, "Connection Error", "Please connect to NanoVNA first")
+            return
+        try:
+            self.vna.control_pause_sweep()
+            self.statusBar().showMessafe("Sweep Paused", 2000)
+        except Exception as e: 
+            QMessageBox.warning(self, "Pause Failed", str(e))
+    
+    def resume_sweep(self):
+        if not self._is_vna_connected():
+            QMessageBox.warning(self, "Connection Error", "Please connect to NanoVNA first")
+            return
+        try:
+            self.vna.control_resume_sweep()
+            self.statusBar().showMessafe("Sweep Resumed", 2000)
+        except Exception as e: 
+            QMessageBox.warning(self, "Resume Failed", str(e))
+            
+    def all_reset(self):
+        if not self._is_vna_connected():
+            QMessageBox.warning(self, "Connection Error", "Please connect to NanoVNA first")
+            return
+        try:
+            self.vna.control_reset()
+            self.statusBar().showMessafe("Reset Done", 2000)
+        except Exception as e: 
+            QMessageBox.warning(self, "Reset Failed", str(e))  
 
     # Inserting the table
 
@@ -1511,17 +1598,23 @@ class MainWindow(QMainWindow):
             # Result display fields
             self.phase_rm_result = QLineEdit()
             self.phase_rm_result.setReadOnly(True)
-            self.phase_reff_result = QLineEdit()
-            self.phase_reff_result.setReadOnly(True)
+            self.phase_fs_result = QLineEdit()
+            self.phase_fs_result.setReadOnly(True)
             self.phase_cm_result = QLineEdit()
             self.phase_cm_result.setReadOnly(True)
             self.phase_lm_result = QLineEdit()
             self.phase_lm_result.setReadOnly(True)
+            self.phase_BW_result = QLineEdit()
+            self.phase_BW_result.setReadOnly(True)
+            self.phase_Q_result = QLineEdit()
+            self.phase_Q_result.setReadOnly(True)
 
             phase_form.addRow("Rm (Ω):", self.phase_rm_result)
-            phase_form.addRow("Reff (Ω):", self.phase_reff_result)
+            phase_form.addRow("Resonant Frequency:", self.phase_fs_result)
             phase_form.addRow("Cm (F):", self.phase_cm_result)
             phase_form.addRow("Lm (H):", self.phase_lm_result)
+            phase_form.addRow("Bandwidth BW (Hz):", self.phase_BW_result)
+            phase_form.addRow("Quality Factor Q:", self.phase_Q_result)
 
             phase_grp.setLayout(phase_form)
             phase_layout.addWidget(phase_grp)
@@ -1574,18 +1667,22 @@ class MainWindow(QMainWindow):
                         method = phaseshiftmethod()
                         phase_deg, s21, s21_db = method.phaseshift(s21_values)
                         results = method.phaseshiftfrequency(freqs, phase_deg, s21_db)
-                        Cm, Rm, Lm, Reff, delta_f = method.phaseshiftcalculation(results)
+                        Cm, Rm, Lm, BW, Q, fs = method.phaseshiftcalculation(results)
                         
                         # Update result fields
                         self.phase_rm_result.setText(f"{Rm:.6f}")
-                        self.phase_reff_result.setText(f"{Reff:.6f}")
+                        self.phase_fs_result.setText(f"{fs:.6f}")
                         self.phase_cm_result.setText(f"{Cm:.6e}")
                         self.phase_lm_result.setText(f"{Lm:.6e}")
+                        self.phase_BW_result.setText(f"{BW:.6f}")
+                        self.phase_Q_result.setText(f"{Q:.6f}")
                         
                         self.latest_rm_result = Rm
-                        self.latest_reff_result = Reff
+                        self.latest_fs_result = fs
                         self.latest_cm_result = Cm
                         self.latest_lm_result = Lm
+                        self.latest_BW_result = BW
+                        self.latest_Q_result = Q
                         
                         QMessageBox.information(self, "Phase Shift Analysis Complete", 
                                             f"Phase shift parameters calculated successfully")
@@ -1605,49 +1702,76 @@ class MainWindow(QMainWindow):
     def auto_detect_frequency(self, target='both'):
         """Auto-detect current frequency from impedance data using your parameter functions"""
         try:
+            # Check main data first
             data_source = getattr(self, 'current_sweep_data', self.data)
             if data_source.empty:
-                QMessageBox.warning(self, "No Data", "No measurement data available.")
+                QMessageBox.warning(self, "No Data", "No measurement data available. Please run a single sweep first.")
                 return
             
-            # Get the latest sweep data
+            print(f"Data shape: {data_source.shape}")  # Debug info
+            print(f"Data columns: {data_source.columns.tolist()}")  # Debug info
+            
+            # Use the most recent data
             points = int(self.sweep_points.text() or 201)
-            if len(self.data) < points:
-                QMessageBox.warning(self, "Insufficient Data", "Please run again")
+            
+            # If we have less than expected points, use all available data
+            if len(data_source) < points:
+                if len(data_source) < 10:  # Minimum threshold
+                    QMessageBox.warning(self, "Insufficient Data", f"Need at least 10 data points, got {len(data_source)}. Please run a complete sweep.")
+                    return
+                # Use all available data
+                data_to_use = data_source
+            else:
+                # Use the last complete sweep
+                data_to_use = data_source.tail(points)
+            
+            # Extract and validate data
+            freqs = pd.to_numeric(data_to_use["Frequency(Hz)"], errors='coerce')
+            resist = pd.to_numeric(data_to_use["Resistance(Ω)"], errors='coerce')
+            react = pd.to_numeric(data_to_use["Reactance(Ω)"], errors='coerce')
+            
+            # Remove NaN values
+            mask = freqs.notnull() & resist.notnull() & react.notnull()
+            freqs = freqs[mask].values
+            resist = resist[mask].values  
+            react = react[mask].values
+            
+            if len(freqs) < 5:  # Need minimum points for analysis
+                QMessageBox.warning(self, "Data Error", f"Only {len(freqs)} valid data points found. Need at least 5 for analysis.")
                 return
             
-            last_sweep = data_source.tail(points)
-            freqs = pd.to_numeric(last_sweep["Frequency(Hz)"], errors='coerce').dropna().values
-            resist = pd.to_numeric(last_sweep["Resistance(Ω)"], errors='coerce').fillna(0).values
-            react = pd.to_numeric(last_sweep["Reactance(Ω)"], errors='coerce').fillna(0).values
-            
-            if len(freqs) == 0:
-                QMessageBox.warning(self, "Data Error", "No valid frequency data")
-                return
+            print(f"Using {len(freqs)} valid data points")  # Debug info
             
             # Create impedance array
             impedance = resist + 1j * react
             
             # Get resonant frequency using your parameter functions
-            ft_sauer = sauer_param(freqs, impedance)
-            ft_konaz = konaz_param(freqs, impedance)
-            
-            if target in ['sauerbrey', 'both'] and hasattr(self, 'sauerb_current_freq'):
-                self.sauerb_current_freq.setText(f"{ft_sauer:.2f}")
+            try:
+                ft_sauer = sauer_param(freqs, impedance)
+                ft_konaz = konaz_param(freqs, impedance)
                 
-            if target in ['konazawa', 'both'] and hasattr(self, 'konaz_current_freq'):
-                self.konaz_current_freq.setText(f"{ft_konaz:.2f}")
-                
-            if target == 'both':
-                self.statusBar().showMessage(f"Auto-detected frequencies - Sauerbrey: {ft_sauer:.2f} Hz, Konazawa: {ft_konaz:.2f} Hz", 3000)
-            else:
-                self.statusBar().showMessage(f"Auto-detected frequency: {ft_sauer if target == 'sauerbrey' else ft_konaz:.2f} Hz", 3000)
-                
+                if target in ['sauerbrey', 'both'] and hasattr(self, 'sauerb_current_freq'):
+                    self.sauerb_current_freq.setText(f"{ft_sauer:.2f}")
+                    
+                if target in ['konazawa', 'both'] and hasattr(self, 'konaz_current_freq'):
+                    self.konaz_current_freq.setText(f"{ft_konaz:.2f}")
+                    
+                if target == 'both':
+                    self.statusBar().showMessage(f"Auto-detected frequencies - Sauerbrey: {ft_sauer:.2f} Hz, Konazawa: {ft_konaz:.2f} Hz", 3000)
+                else:
+                    freq_val = ft_sauer if target == 'sauerbrey' else ft_konaz
+                    self.statusBar().showMessage(f"Auto-detected frequency: {freq_val:.2f} Hz", 3000)
+                    
+            except Exception as param_error:
+                QMessageBox.warning(self, "Parameter Calculation Error", f"Error calculating resonant frequency: {str(param_error)}")
+                return
+                    
         except ImportError as e:
             QMessageBox.warning(self, "Import Error", f"Could not import parameter functions: {str(e)}")
         except Exception as e:
             QMessageBox.warning(self, "Detection Error", f"Error detecting frequency: {str(e)}")
-
+            print(f"Full error: {e}")  # Debug info
+        
     def calculate_sauerbrey_mass(self):
         """Calculate mass change using your Sauerbrey function"""
         try:
@@ -1796,12 +1920,20 @@ class MainWindow(QMainWindow):
             if not hasattr(self, 'f_edit'):
                 self.f_edit = QLineEdit()
                 self.f_edit.setReadOnly(True)
+            if not hasattr(self, 'Q_edit'):
+                self.Q_edit = QLineEdit()
+                self.Q_edit.setReadOnly(True)
+            if not hasattr(self, 'Dissipation_edit'):
+                self.Dissipation_edit = QLineEdit()
+                self.Dissipation_edit.setReadOnly(True)
                 
             form.addRow("Fs (Hz):", self.f_edit)
             form.addRow("Rm (Ω):", self.rm_edit)
             form.addRow("Lm (H):", self.lm_edit)
             form.addRow("Cm (F):", self.cm_edit)
             form.addRow("C0 (F):", self.c0_edit)
+            form.addRow("Quality Factor (Q):", self.Q_edit)
+            form.addRow("Dissipation (D):", self.Dissipation_edit)
             
             self.fit_button = QPushButton("Fit BVD")
             form.addRow(self.fit_button)
@@ -1847,7 +1979,7 @@ class MainWindow(QMainWindow):
             impedance = resist + 1j * react
             
             try:
-                Rm, Lm, Cm, C0, fs, Q = parameter(freqs, impedance, resist)
+                Rm, Lm, Cm, C0, fs, Q, D = parameter(freqs, impedance)
                 
                 # Update the display fields
                 self.rm_edit.setText(f"{Rm:.6f}")
@@ -1855,12 +1987,17 @@ class MainWindow(QMainWindow):
                 self.cm_edit.setText(f"{Cm:.6e}")
                 self.c0_edit.setText(f"{C0:.6e}")
                 self.f_edit.setText(f"{fs:.2f}")
+                self.Q_edit.setText(f"{Q:.2f}")
+                self.Dissipation_edit.setText(f"{D:.6f}")
+                
                 
                 self.latest_rm = Rm
                 self.latest_lm = Lm
                 self.latest_cm = Cm
                 self.latest_c0 = C0
                 self.latest_fs = fs
+                self.latest_Q = Q
+                self.latest_D = D
                 
                 QMessageBox.information(self, "Fit Complete", "BVD parameters fitted successfully")
                 
@@ -1895,7 +2032,7 @@ class MainWindow(QMainWindow):
                 return
 
             num_sweeps = total_rows // points
-            t_seconds, rm_values, fs_values, lm_values, cm_values = [], [], [], [], []
+            t_seconds, rm_values, fs_values, lm_values, cm_values, q_values, d_values = [], [], [], [], [], [], []
 
             for i in range(num_sweeps):
                 block = data_source.iloc[i * points:(i + 1) * points]
@@ -1914,12 +2051,14 @@ class MainWindow(QMainWindow):
                 impedance = resist + 1j * react
 
                 try:
-                    Rm, Lm, Cm, C0, fs, Q = parameter(freqs, impedance, resist)
+                    Rm, Lm, Cm, C0, fs, Q, D = parameter(freqs, impedance)
                     rm_values.append(Rm)
                     fs_values.append(fs)
                     lm_values.append(Lm)
-                    cm_values.append(Cm)
+                    cm_values.append(Cm) 
                     t_seconds.append(i * 2)
+                    q_values.append(Q)
+                    d_values.append(D)
                 except Exception as e:  
                     print(f"Error in sweep {i}: {e}")
                     continue
@@ -1934,7 +2073,9 @@ class MainWindow(QMainWindow):
                 "Rm(Ω)": rm_values,
                 "Lm(H)": lm_values,
                 "Cm(F)": cm_values,
-                "Fs(Hz)": fs_values
+                "Fs(Hz)": fs_values,
+                "Q": q_values,
+                "D": d_values
             })
 
             # Update latest params
@@ -1944,6 +2085,8 @@ class MainWindow(QMainWindow):
             if 'C0' in locals():
                 self.c0_edit.setText(f"{C0:.6e}")
             self.f_edit.setText(f"{fs_values[-1]:.2f}")
+            self.Q_edit.setText(f"{q_values[-1]:.2f}")
+            self.Dissipation_edit.setText(f"{d_values[-1]:.6f}")
 
             # Plot
             self.multiplot.axes_Rm.clear()
