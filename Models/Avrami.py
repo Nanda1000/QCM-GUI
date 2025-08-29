@@ -1,18 +1,19 @@
 import numpy as np
 from scipy.optimize import curve_fit
 
-def formula(k, n, t):
+def formula(t, k, n):
     return 1 - np.exp(-k * t**n)
 
 def compute_X_t(f_array, f0, finf):
     f_array = np.array(f_array, dtype=float)
-    denominator = f0 - finf
-    if denominator == 0:
-        raise ValueError("Initial and final frequencies must not be equal.")
-    numerator = f_array - f0
-    X_t = numerator / denominator
-    X_t = np.clip(X_t, 0, 1)
-    return X_t
+    if finf < f0:
+        # Sign Flip as the frequency value range is increasing, it gets negative
+        """To get correct crystallinity values, sign flip is needed"""
+        return (f0 - f_array) / (f0 - finf)
+    else:
+        
+        return (f_array - f0) / (finf - f0)
+
 
 def validate_data(t, f_array):
     """
@@ -54,15 +55,16 @@ def fit(t, f_array):
     f0 = f_clean[0]
     finf = f_clean[-1]
 
-    if abs(f0 - finf) < 1e-8:
-        raise ValueError("f₀ and f_inf are too close. Cannot compute crystallization fraction.")
+    if abs(f0 - finf) < 50:  # Hz threshold
+        print("Warning: small frequency change, results may be noisy")
+
 
     X_t = compute_X_t(f_clean, f0, finf)
 
     if np.any(np.isnan(X_t)) or np.any(np.isinf(X_t)):
         raise ValueError("X(t) contains NaN or Inf values.")
 
-    if np.std(X_t) < 1e-1:
+    if np.std(X_t) < 1e-3:
         raise ValueError("Crystallization fraction variation is too low.")
 
     bounds = ([1e-10, 0.1], [1e-1, 10.0])
