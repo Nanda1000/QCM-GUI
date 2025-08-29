@@ -29,6 +29,7 @@ from Models.Sauerbrey import sauerbrey, parameter_sauerbrey as sauer_param
 from Models.konazawa import konazawa, parameter_konazawa as konaz_param
 #Matplotlib
 from matplotlib.figure import Figure
+from scipy.interpolate import UnivariateSpline as smooth
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import (
   NavigationToolbar2QT as NavigationToolbar,
@@ -41,6 +42,9 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT, TA_CENTER, TA_RIGHT
 #zip file
 import zipfile
+#Linewidth 1
+import matplotlib as mpl
+mpl.rcParams['lines.linewidth'] = 1.0
 
 # PLotting
 #Resistance vs Frequency
@@ -208,6 +212,8 @@ class MainWindow(QMainWindow):
         self.latest_rm_result = 0.0
         self.latest_cm_result = 0.0
         self.latest_lm_result = 0.0
+        self.latest_Q = 0.0
+        self.latest_D = 0.0
         
         # Signal handler for thread-safe communication
         self.signal_handler = DataSignalHandler()
@@ -335,8 +341,6 @@ class MainWindow(QMainWindow):
 
         # Controls
         left_widget = QWidget()
-        left_widget.setFixedWidth(350)
-        left_widget.addStretch()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setSpacing(8)
         left_layout.setContentsMargins(10, 10, 10, 10)
@@ -1191,15 +1195,12 @@ class MainWindow(QMainWindow):
             return
         
         try:
-            self.signal_handler.status_update.emit("Starting calibration")
-            if self.vna.calibrate():
-                self.signal_handler.status_update.emit("Calibration completed successfully")
-            else:
-                self.signal_handler.error_occurred.emit("Calibration Failed", "Calibration process failed")
+            self.statusBar().showMessage("Started Calibration", 2000)
+            self.vna.calibrate()
         except Exception as e:
             self.signal_handler.error_occurred.emit("Calibration Error", str(e))
                 
-        self.statusBar().showMessage("Calibrating NanoVNA...", 2000)
+        self.statusBar().showMessage("Calibrated Successfully", 2000)
         
         
             
@@ -1209,7 +1210,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.vna.control_pause_sweep()
-            self.statusBar().showMessafe("Sweep Paused", 2000)
+            self.statusBar().showMessage("Sweep Paused", 2000)
         except Exception as e: 
             QMessageBox.warning(self, "Pause Failed", str(e))
     
@@ -1219,7 +1220,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.vna.control_resume_sweep()
-            self.statusBar().showMessafe("Sweep Resumed", 2000)
+            self.statusBar().showMessage("Sweep Resumed", 2000)
         except Exception as e: 
             QMessageBox.warning(self, "Resume Failed", str(e))
             
@@ -1229,7 +1230,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.vna.control_reset()
-            self.statusBar().showMessafe("Reset Done", 2000)
+            self.statusBar().showMessage("Reset Done", 2000)
         except Exception as e: 
             QMessageBox.warning(self, "Reset Failed", str(e))  
 
@@ -2032,7 +2033,37 @@ class MainWindow(QMainWindow):
                 return
 
             num_sweeps = total_rows // points
-            t_seconds, rm_values, fs_values, lm_values, cm_values, q_values, d_values = [], [], [], [], [], [], []
+
+            df = data_source.reset_index(drop=True)
+
+            # Use Timestamp column if present
+            if "Timestamp" in df.columns:
+                times = []
+                for i in range(num_sweeps):
+                    sweep = df.iloc[i*points:(i+1)*points]
+                    t = pd.to_datetime(sweep["Timestamp"].iloc[0])
+                    times.append(t)
+
+                # Convert to seconds relative to start
+                time_array = pd.to_datetime(times)
+                t_seconds = (time_array - time_array[0]).total_seconds().to_numpy()
+
+            
+            # Interval input as fallback
+            elif self.interval_edit.text():
+                try:
+                    interval = float(self.interval_edit.text())
+                    if interval <= 0:
+                        raise ValueError
+                    t_seconds = np.arange(num_sweeps) * interval
+                except ValueError:
+                    QMessageBox.warning(self, "Input Error", "Invalid interval value.")
+                    return
+
+            else:
+                raise ValueError("No Timestamp column found and no interval provided.")
+            
+            rm_values, fs_values, lm_values, cm_values, q_values, d_values = [], [], [], [], [], []
 
             for i in range(num_sweeps):
                 block = data_source.iloc[i * points:(i + 1) * points]
@@ -2056,7 +2087,6 @@ class MainWindow(QMainWindow):
                     fs_values.append(fs)
                     lm_values.append(Lm)
                     cm_values.append(Cm) 
-                    t_seconds.append(i * 2)
                     q_values.append(Q)
                     d_values.append(D)
                 except Exception as e:  
@@ -2087,28 +2117,34 @@ class MainWindow(QMainWindow):
             self.f_edit.setText(f"{fs_values[-1]:.2f}")
             self.Q_edit.setText(f"{q_values[-1]:.2f}")
             self.Dissipation_edit.setText(f"{d_values[-1]:.6f}")
+            
+            t_new = np.linspace(t_seconds.min(), t_seconds.max(), 200)
+            fs_new = smooth(t_seconds, fs_values, s=1)(t_new)
+            rm_new = smooth(t_seconds, rm_values, s=1)(t_new)
+            lm_new = smooth(t_seconds, lm_values, s=1)(t_new)
+            cm_new = smooth(t_seconds, cm_values, s=1)(t_new)
 
             # Plot
             self.multiplot.axes_Rm.clear()
-            self.multiplot.axes_Rm.plot(t_seconds, rm_values, 'bo-')
+            self.multiplot.axes_Rm.plot(t_new, rm_new, 'bo-')
             self.multiplot.axes_Rm.set_title("Motional Resistance vs time")
             self.multiplot.axes_Rm.set_xlabel("Time(s)")
             self.multiplot.axes_Rm.set_ylabel("Rm(Ω)")
 
             self.multiplot.axes_Fs.clear()
-            self.multiplot.axes_Fs.plot(t_seconds, fs_values, 'ro-')
+            self.multiplot.axes_Fs.plot(t_new, fs_new, 'ro-')
             self.multiplot.axes_Fs.set_title("Resonance frequency vs time")
             self.multiplot.axes_Fs.set_xlabel("Time(s)")
             self.multiplot.axes_Fs.set_ylabel("fs(Hz)")
 
             self.multiplot.axes_Lm.clear()
-            self.multiplot.axes_Lm.plot(t_seconds, lm_values, 'go-')
+            self.multiplot.axes_Lm.plot(t_new, lm_new, 'go-')
             self.multiplot.axes_Lm.set_title("Motional Inductance vs time")
             self.multiplot.axes_Lm.set_xlabel("Time(s)")
             self.multiplot.axes_Lm.set_ylabel("Lm(H)")
 
             self.multiplot.axes_Cm.clear()
-            self.multiplot.axes_Cm.plot(t_seconds, cm_values, 'mo-')
+            self.multiplot.axes_Cm.plot(t_new, cm_new, 'mo-')
             self.multiplot.axes_Cm.set_title("Motional Capacitance vs time")
             self.multiplot.axes_Cm.set_xlabel("Time(s)")
             self.multiplot.axes_Cm.set_ylabel("Cm(F)")
@@ -2218,16 +2254,75 @@ class MainWindow(QMainWindow):
             if mask.sum() < 3:
                 QMessageBox.warning(self, "Data Error", "Too few points for analysis.")
                 return
+            total_rows = len(data_source)
+            points = int(self.sweep_points.text() or 201)
+            if points <= 0:
+                QMessageBox.warning(self, "Input Error", "Invalid sweep points.")
+                return
+            num_sweeps = total_rows // points
+            sweep_points = points
 
-            t_seconds = (timestamps[mask] - timestamps[mask].min()).dt.total_seconds().values
-            fvals = freqs[mask].values
+            df = data_source.reset_index(drop=True)
+            
+            # Use Timestamp column if present
+            if "Timestamp" in df.columns:
+                times = []
+                for i in range(num_sweeps):
+                    sweep = df.iloc[i*sweep_points:(i+1)*sweep_points]
+                    t = pd.to_datetime(sweep["Timestamp"].iloc[0])
+                    times.append(t)
+
+                # Convert to seconds relative to start
+                time_array = pd.to_datetime(times)
+                t_seconds = (time_array - time_array[0]).total_seconds().to_numpy()
+            
+            # Interval input as fallback
+            elif self.interval_edit.text():
+                try:
+                    interval = float(self.interval_edit.text())
+                    if interval <= 0:
+                        raise ValueError
+                    t_seconds = np.arange(num_sweeps) * interval
+                except ValueError:
+                    QMessageBox.warning(self, "Input Error", "Invalid interval value.")
+                    return
+
+            else:
+                raise ValueError("No Timestamp column found and no interval provided.")
+
+            #  compute frequency per sweep and ensure time array and frequency array to be matched
+            f_per_sweep = []
+            for i in range(num_sweeps):
+                sweep = df.iloc[i*sweep_points:(i+1)*sweep_points]
+
+                imp = pd.to_numeric(sweep["Impedance(Ω)"], errors="coerce").to_numpy()
+                freq = pd.to_numeric(sweep["Frequency(Hz)"], errors="coerce").to_numpy()
+
+                mask_s = np.isfinite(imp) & np.isfinite(freq)
+                if not np.any(mask_s):
+                    continue
+
+                
+                idx_min = np.argmin(imp[mask_s])
+                f_res = freq[mask_s][idx_min]
+                f_per_sweep.append(f_res)
+
+            
+            if len(f_per_sweep) != len(t_seconds) or len(f_per_sweep) < 3:
+                QMessageBox.warning(self, "Data Error", "Could not extract one resonance per sweep.")
+                return
+
+            fvals = np.array(f_per_sweep, dtype=float)
+
             f0, finf = fvals[0], fvals[-1]
             self.f0_edit.setText(f"{f0:.2f}")
             self.finf_edit.setText(f"{finf:.2f}")
 
             X_actual = compute_X_t(fvals, f0, finf)
+            t_new = np.linspace(t_seconds.min(), t_seconds.max(), 200)
+            X_new = smooth(t_seconds, X_actual, s=1)(t_new)
             self.plot_crystallization_fraction.axes.clear()
-            self.plot_crystallization_fraction.axes.plot(t_seconds, X_actual, 'bo-')
+            self.plot_crystallization_fraction.axes.plot(t_new, X_new, 'bo-', label="Experimental")
             self.plot_crystallization_fraction.draw()
 
             # Fit Avrami
@@ -2235,8 +2330,8 @@ class MainWindow(QMainWindow):
                 k, n = avrami_fit(t_seconds, fvals)
                 self.k_edit.setText(f"{k:.3e}")
                 self.n_edit.setText(f"{n:.3f}")
-                X_fit = avrami_formula(k, n, t_seconds)
-                self.plot_crystallization_fraction.axes.plot(t_seconds, X_fit, 'r-')
+                X_fit = avrami_formula(t_seconds, k, n)
+                self.plot_crystallization_fraction.axes.plot(t_seconds, X_fit, 'r-', label="Fitted Curve")
                 self.plot_crystallization_fraction.draw()
             except Exception as e:
                 QMessageBox.warning(self, "Fit Error", str(e))
