@@ -46,52 +46,42 @@ def butterworth(fs, Rm, Lm, Cm, C0):
     return 1 / Y
 
 
-def calculate_Q_from_impedance(freqs, Z1):
-    abs_Z = np.abs(Z1)
+def calculate_Q_from_impedance(freqs, Z):
+    """
+    Calculate Q using the 3 dB bandwidth method (series resonance).
+    freqs : array of frequencies [Hz]
+    Z     : array of complex impedance values
+    Returns: fs, bandwidth, Q
+    """
+    abs_Z = np.abs(Z)
+
+    # Find series resonance (min |Z|)
     min_idx = np.argmin(abs_Z)
     fs = freqs[min_idx]
     min_Z = abs_Z[min_idx]
 
+    # 3 dB threshold
     threshold = min_Z * np.sqrt(2)
 
-    # Robust spline fitting
-    s_values = [1, 5, 10, 20, 50, 100, 200, 500, 1000]
-    spline = None
-    for s in s_values:
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                spline = UnivariateSpline(freqs, abs_Z - threshold, s)
-            fine_freqs = np.linspace(freqs[0], freqs[-1], 5000)
-            fine_Z = spline(fine_freqs)
-            break
-        except Exception:
-            spline = None
-            continue
+    # Find crossing points
+    # Left side
+    left_idx = np.where(abs_Z[:min_idx] >= threshold)[0]
+    if len(left_idx) > 0:
+        f1 = freqs[left_idx[-1]]
     else:
-        spline = None
+        f1 = freqs[0]
 
-    # If spline fails or no roots, fallback to nearest points
-    if spline is not None:
-        roots = spline.roots()
-        left_roots = roots[roots < fs]
-        right_roots = roots[roots > fs]
-
-        if len(left_roots) == 0:
-            left_roots = [fine_freqs[np.where(fine_Z < 0)[0][0]]] if np.any(fine_Z < 0) else [fs]
-        if len(right_roots) == 0:
-            right_roots = [fine_freqs[np.where(fine_Z < 0)[0][-1]]] if np.any(fine_Z < 0) else [fs]
-
-        bandwidth = right_roots[-1] - left_roots[0]
+    # Right side
+    right_idx = np.where(abs_Z[min_idx:] >= threshold)[0]
+    if len(right_idx) > 0:
+        f2 = freqs[min_idx:][right_idx[0]]
     else:
-        # fallback to simple linear search
-        indices = np.where(abs_Z <= threshold)[0]
-        if len(indices) >= 2:
-            bandwidth = freqs[indices[-1]] - freqs[indices[0]]
-        else:
-            bandwidth = np.nan
+        f2 = freqs[-1]
 
+    # Bandwidth and Q
+    bandwidth = f2 - f1
     Q = fs / bandwidth if bandwidth > 0 else np.nan
+
     return fs, bandwidth, Q
 
 
