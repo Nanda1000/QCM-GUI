@@ -14,10 +14,11 @@ import numpy as np
 import pandas as pd
 from Models.phaseshift import phaseshiftmethod
 
+
 from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex, pyqtSignal, QObject
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (
-    QFileDialog, QGroupBox, QSplitter, QWidget, QTableView, QLineEdit, QToolBar,
+    QFileDialog,QCheckBox, QGroupBox, QSplitter, QWidget, QTableView, QLineEdit, QToolBar,
     QHBoxLayout, QMessageBox, QPushButton, QLabel, QVBoxLayout, QMainWindow,
     QApplication, QStatusBar, QFormLayout, QComboBox, QSizePolicy, QFrame, QTabWidget
 )
@@ -30,6 +31,7 @@ from Models.konazawa import konazawa, parameter_konazawa as konaz_param
 #Matplotlib
 from matplotlib.figure import Figure
 from scipy.interpolate import UnivariateSpline as smooth
+from scipy.signal import savgol_filter
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import (
   NavigationToolbar2QT as NavigationToolbar,
@@ -272,6 +274,10 @@ class MainWindow(QMainWindow):
 
         self.act_toggle_theme = QAction(QIcon("icons/theme.png"), "Toggle Dark Mode", self)
         self.act_toggle_theme.triggered.connect(self.toggle_theme)
+        
+        self.filter = QCheckBox("Filter Data")
+        self.filter.setChecked(False)
+        self.filter.stateChanged.connect(self.apply_filter_data)
 
     def _build_toolbar(self):
         toolbar = QToolBar("Main Toolbar")
@@ -286,6 +292,7 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(self.act_export)
         toolbar.addAction(self.act_toggle_theme)
+        toolbar.addWidget(self.filter)
 
         # Menu
         menu = self.menuBar()
@@ -532,6 +539,13 @@ class MainWindow(QMainWindow):
         main_splitter.addWidget(right_splitter)
         main_splitter.setStretchFactor(0, 0)
         main_splitter.setStretchFactor(1, 1)
+        
+    #Filter the data
+    def apply_filter_data(self, y, window=11, poly=3):
+        """Apply Savitzky-Golay Filter"""
+        if self.filter.isChecked() and len(y) > window:
+            return savgol_filter(y, window_length=window, polyorder=poly)
+        return y
         
         
     #File menu toggling buttons
@@ -2119,32 +2133,32 @@ class MainWindow(QMainWindow):
             self.Dissipation_edit.setText(f"{d_values[-1]:.6f}")
             
             t_new = np.linspace(t_seconds.min(), t_seconds.max(), 200)
-            fs_new = smooth(t_seconds, fs_values, s=1)(t_new)
-            rm_new = smooth(t_seconds, rm_values, s=1)(t_new)
-            lm_new = smooth(t_seconds, lm_values, s=1)(t_new)
-            cm_new = smooth(t_seconds, cm_values, s=1)(t_new)
+            fs_new = self.apply_filter_data(smooth(t_seconds, fs_values, s=len(t_seconds))(t_new))
+            rm_new = self.apply_filter_data(smooth(t_seconds, rm_values, s=len(t_seconds))(t_new))
+            lm_new = self.apply_filter_data(smooth(t_seconds, lm_values, s=len(t_seconds))(t_new))
+            cm_new = self.apply_filter_data(smooth(t_seconds, cm_values, s=len(t_seconds))(t_new))
 
             # Plot
             self.multiplot.axes_Rm.clear()
-            self.multiplot.axes_Rm.plot(t_new, rm_new, 'bo-')
+            self.multiplot.axes_Rm.plot(t_new, rm_new, 'b-')
             self.multiplot.axes_Rm.set_title("Motional Resistance vs time")
             self.multiplot.axes_Rm.set_xlabel("Time(s)")
             self.multiplot.axes_Rm.set_ylabel("Rm(Ω)")
 
             self.multiplot.axes_Fs.clear()
-            self.multiplot.axes_Fs.plot(t_new, fs_new, 'ro-')
+            self.multiplot.axes_Fs.plot(t_new, fs_new, 'r-')
             self.multiplot.axes_Fs.set_title("Resonance frequency vs time")
             self.multiplot.axes_Fs.set_xlabel("Time(s)")
             self.multiplot.axes_Fs.set_ylabel("fs(Hz)")
 
             self.multiplot.axes_Lm.clear()
-            self.multiplot.axes_Lm.plot(t_new, lm_new, 'go-')
+            self.multiplot.axes_Lm.plot(t_new, lm_new, 'g-')
             self.multiplot.axes_Lm.set_title("Motional Inductance vs time")
             self.multiplot.axes_Lm.set_xlabel("Time(s)")
             self.multiplot.axes_Lm.set_ylabel("Lm(H)")
 
             self.multiplot.axes_Cm.clear()
-            self.multiplot.axes_Cm.plot(t_new, cm_new, 'mo-')
+            self.multiplot.axes_Cm.plot(t_new, cm_new, 'm-')
             self.multiplot.axes_Cm.set_title("Motional Capacitance vs time")
             self.multiplot.axes_Cm.set_xlabel("Time(s)")
             self.multiplot.axes_Cm.set_ylabel("Cm(F)")
@@ -2320,9 +2334,12 @@ class MainWindow(QMainWindow):
 
             X_actual = compute_X_t(fvals, f0, finf)
             t_new = np.linspace(t_seconds.min(), t_seconds.max(), 200)
-            X_new = smooth(t_seconds, X_actual, s=1)(t_new)
+            X_new = self.apply_filter_data(smooth(t_seconds, X_actual, s=len(t_seconds))(t_new))
             self.plot_crystallization_fraction.axes.clear()
-            self.plot_crystallization_fraction.axes.plot(t_new, X_new, 'bo-', label="Experimental")
+            self.plot_crystallization_fraction.axes.plot(t_new, X_new, 'b-', label="Experimental")
+            self.plot_crystallization_fraction.axes.set_title("Crystallinity vs time")
+            self.plot_crystallization_fraction.axes.set_xlabel("Time(s)")
+            self.plot_crystallization_fraction.axes.set_ylabel("Crystallinity X(t)")
             self.plot_crystallization_fraction.draw()
 
             # Fit Avrami
