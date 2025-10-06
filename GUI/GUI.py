@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
 from Models.Butterworth import parameter, butterworth
 from Models.Avrami import compute_X_t, fit as avrami_fit, formula as avrami_formula
 from Models.Sauerbrey import sauerbrey
-from Models.konazawa import konazawa
+from Models.konazawa import konazawa, calculate_Q_from_impedance as konazawa_Q
 from Models.Sauerbrey import sauerbrey, parameter_sauerbrey as sauer_param
 from Models.konazawa import konazawa, parameter_konazawa as konaz_param
 #Matplotlib
@@ -546,7 +546,17 @@ class MainWindow(QMainWindow):
         if self.filter.isChecked() and len(y) > window:
             return savgol_filter(y, window_length=window, polyorder=poly)
         return y
-        
+    
+    def safe_spline(x, y, s=None, k=3):
+        if len(x) <= k:
+            # Not enough points: return raw values interpolated with nearest
+            return lambda xx: np.interp(xx, x, y)
+        try:
+            return smooth(x, y, s=s, k=min(k, len(x)-1))
+        except Exception:
+            # If spline fails, fall back to linear interpolation
+            return lambda xx: np.interp(xx, x, y)
+            
         
     #File menu toggling buttons
     def new_file(self):
@@ -1586,9 +1596,15 @@ class MainWindow(QMainWindow):
             self.konaz_freq_shift.setReadOnly(True)
             self.konaz_result = QLineEdit()
             self.konaz_result.setReadOnly(True)
+            self.konaz_Q = QLineEdit()
+            self.konaz_Q.setReadOnly(True)
+            self.konaz_D = QLineEdit()
+            self.konaz_D.setReadOnly(True)
             
             konaz_result_layout.addRow("Frequency Shift Δf (Hz):", self.konaz_freq_shift)
-            konaz_result_layout.addRow("Konazawa Result n:", self.konaz_result)
+            konaz_result_layout.addRow("Viscosity:", self.konaz_result)
+            konaz_result_layout.addRow("Quality Factor Q:", self.konaz_Q)
+            konaz_result_layout.addRow("Damping Coefficient D:", self.konaz_D)
             
             konaz_calc_layout.addLayout(konaz_result_layout)
             konaz_calc_group.setLayout(konaz_calc_layout)
@@ -1847,13 +1863,28 @@ class MainWindow(QMainWindow):
             konaz_result = konazawa(f0, p, u, ft, p1)
             freq_shift = f0 - ft
             
+            data_source = getattr(self, 'current_sweep_data', self.data)
+            points = int(self.sweep_points.text() or 201)
+            last_sweep = data_source.tail(points)
+            freqs = pd.to_numeric(last_sweep["Frequency(Hz)"], errors='coerce').values
+            resist = pd.to_numeric(last_sweep["Resistance(Ω)"], errors='coerce').fillna(0).values
+            react = pd.to_numeric(last_sweep["Reactance(Ω)"], errors='coerce').fillna(0).values
+            impedance = resist + 1j * react
+                        
+            # Calculate Quality Factor Q and Damping Coefficient D
+            fs, bandwidth, Q = konazawa_Q(freqs, impedance)
+            
             # Update results
             self.konaz_freq_shift.setText(f"{freq_shift:.2f}")
             self.konaz_result.setText(f"{konaz_result:.6e}")
+            self.konaz_Q.setText(f"{Q:.2f}")
+            self.konaz_D.setText(f"{1/Q:.6f}" if Q != 0 else "Inf")
             
             QMessageBox.information(self, "Konazawa Calculation Complete", 
                                 f"Frequency Shift: {freq_shift:.2f} Hz\n"
-                                f"Konazawa Result n: {konaz_result:.6e}")
+                                f"Viscosity: {konaz_result:.6e}")
+                     
+            
             
         except ValueError as e:
             QMessageBox.warning(self, "Input Error", f"Invalid input parameters: {e}")
@@ -2023,6 +2054,7 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             QMessageBox.warning(self, "Fit Error", str(e))
+            
 
     def plotcrystallization(self):
         """Extract sweep-by-sweep BVD params and update dynamics plots."""
