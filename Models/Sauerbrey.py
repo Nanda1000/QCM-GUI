@@ -15,7 +15,7 @@ def parameter_sauerbrey(freqs, impedance):
     max_index = np.argmax(conduct)
     fs = freqs[max_index]
     
-    ft = fs
+    ft = fs - 100 #Subtracting 100Hz offset to estimate frequency shift
     
     return ft
     
